@@ -47,10 +47,13 @@ Le robot sauvegarde la moyenne absolue des deux encodeurs comme
 
 1. Replacez manuellement le robot au depart.
 2. Appuyez sur `A` pour lancer un essai motorise.
-3. Le robot parcourt la distance memorisee, s'arrete, mesure son depassement et
-   l'ecart entre les roues, ajuste les gains puis les sauvegarde.
+3. Le robot parcourt la distance memorisee, s'arrete, calcule un score, conserve
+   le meilleur PID connu puis prepare le candidat suivant.
 4. Replacez-le au depart et appuyez de nouveau sur `A`.
-5. Repetez plusieurs fois, puis appuyez sur `B` pour terminer.
+5. Realisez idealement entre 20 et 30 essais afin de tester les gains dans les
+   deux directions et de reduire progressivement les pas.
+6. Appuyez sur `B` pour terminer : le meilleur PID mesure est restaure et
+   sauvegarde.
 
 Pendant tout mouvement, `A+B` provoque un arret d'urgence.
 
@@ -78,7 +81,7 @@ make read-config PROJECT=position_1m
 
 Le fichier est alors copie dans `position_1m/position_config.txt`.
 
-## Adaptation PID utilisee
+## Entrainement PID utilise
 
 Il n'existe pas de formule permettant de calculer exactement les gains PID a
 partir d'un seul parcours manuel. Le parcours manuel calibre uniquement les
@@ -89,17 +92,29 @@ Chaque essai motorise mesure ensuite :
 ```text
 depassement = position_finale - position_cible
 erreur_direction = encodeur_gauche - encodeur_droit
+score = abs(depassement) * 10
+      + depassement_positif * 20
+      + abs(erreur_direction) * 2
+      + duree_en_secondes
 ```
 
-- Si le robot depasse, `Kd_position` augmente et `Kp_position` diminue
-  legerement.
-- S'il s'arrete trop tot, `Kp_position` augmente.
-- S'il derive, les gains de correction de direction augmentent.
-- Les nouvelles valeurs sont sauvegardees apres chaque essai.
+Le depassement est davantage penalise qu'un arret legerement trop court. Le
+robot teste successivement :
 
-`Ki_position` reste initialement nul pour eviter l'accumulation d'erreur et le
-depassement. Il ne doit etre ajoute qu'apres observation d'une erreur
-persistante.
+```text
+P position
+I position
+D position
+P direction
+D direction
+```
+
+Pour chaque gain, il essaie une augmentation puis une diminution. Si le score
+s'ameliore, le nouveau PID devient le meilleur. Sinon, le meilleur PID est
+restaure, le pas de recherche diminue, puis le gain suivant est teste.
+
+`I_position` commence a zero, mais il est maintenant reellement teste avec de
+tres petits pas. Il restera nul si son ajout degrade le score.
 
 ## Limites physiques
 

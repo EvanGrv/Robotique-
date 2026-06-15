@@ -38,6 +38,19 @@ config = {
     "kp_heading": 0.75,
     "kd_heading": 0.35,
     "pid_trials": 2,
+    "best_score": 999999.0,
+    "best_kp_position": 0.3686,
+    "best_ki_position": 0.0,
+    "best_kd_position": 0.58,
+    "best_kp_heading": 0.75,
+    "best_kd_heading": 0.35,
+    "tune_axis": 0,
+    "tune_direction": 1,
+    "step_kp_position": 0.04,
+    "step_ki_position": 0.0005,
+    "step_kd_position": 0.08,
+    "step_kp_heading": 0.08,
+    "step_kd_heading": 0.05,
 }
 CONFIG_KEYS = (
     "ticks_per_meter",
@@ -49,6 +62,19 @@ CONFIG_KEYS = (
     "kp_heading",
     "kd_heading",
     "pid_trials",
+    "best_score",
+    "best_kp_position",
+    "best_ki_position",
+    "best_kd_position",
+    "best_kp_heading",
+    "best_kd_heading",
+    "tune_axis",
+    "tune_direction",
+    "step_kp_position",
+    "step_ki_position",
+    "step_kd_position",
+    "step_kp_heading",
+    "step_kd_heading",
 )
 
 state = IDLE
@@ -62,6 +88,7 @@ previous_position_error = 0
 previous_heading_error = 0
 last_control_time = running_time()
 last_report_time = running_time()
+run_started = 0
 
 
 def clamp(value, minimum, maximum):
@@ -79,17 +106,20 @@ def load_config():
             for line in config_file.read().split("\n"):
                 if not line:
                     continue
-                key, value = line.strip().split("=", 1)
-                if key not in config:
-                    continue
-                if isinstance(config[key], bool):
-                    config[key] = value == "True"
-                elif isinstance(config[key], int):
-                    config[key] = int(value)
-                else:
-                    config[key] = float(value)
+                try:
+                    key, value = line.strip().split("=", 1)
+                    if key not in config:
+                        continue
+                    if isinstance(config[key], bool):
+                        config[key] = value == "True"
+                    elif isinstance(config[key], int):
+                        config[key] = int(value)
+                    else:
+                        config[key] = float(value)
+                except ValueError:
+                    print("CONFIG_LINE_IGNORED", line)
         print("CONFIG_LOADED", config)
-    except (OSError, ValueError):
+    except OSError:
         print("CONFIG_DEFAULT", config)
 
 
@@ -139,11 +169,11 @@ def stop_motors():
     write_register(0x00, (0, 0, 0, 0))
 
 
-def reset_pid():
+def reset_pid(initial_error=0):
     global position_integral, previous_position_error, previous_heading_error
     global last_control_time
     position_integral = 0.0
-    previous_position_error = 0
+    previous_position_error = initial_error
     previous_heading_error = 0
     last_control_time = running_time()
 
@@ -163,13 +193,14 @@ def enter_idle():
 
 
 def start_run(is_tuning=False):
-    global state, target_ticks, tuning_trial
+    global state, target_ticks, tuning_trial, run_started
     stop_motors()
     reset_encoders()
-    reset_pid()
     target_ticks = int(
         config["ticks_per_meter"] * config["distance_cm"] / 100
     )
+    reset_pid(target_ticks)
+    run_started = running_time()
     tuning_trial = is_tuning
     state = RUNNING
     display.show(Image.ARROW_N)
@@ -265,6 +296,7 @@ def finish_manual_calibration():
     config["ticks_per_meter"] = measured_ticks
     config["calibrated"] = True
     config["distance_cm"] = 100
+    reset_tuner()
     save_config()
     append_history(
         "MANUAL ticks_per_meter={} left={} right={}".format(
@@ -277,45 +309,124 @@ def finish_manual_calibration():
     print("PID_TUNE_READY place at start, A=trial B=finish")
 
 
+def restore_best_pid():
+    config["kp_position"] = config["best_kp_position"]
+    config["ki_position"] = config["best_ki_position"]
+    config["kd_position"] = config["best_kd_position"]
+    config["kp_heading"] = config["best_kp_heading"]
+    config["kd_heading"] = config["best_kd_heading"]
+
+
+def save_best_pid(score):
+    config["best_score"] = score
+    config["best_kp_position"] = config["kp_position"]
+    config["best_ki_position"] = config["ki_position"]
+    config["best_kd_position"] = config["kd_position"]
+    config["best_kp_heading"] = config["kp_heading"]
+    config["best_kd_heading"] = config["kd_heading"]
+
+
+def reset_tuner():
+    config["pid_trials"] = 0
+    config["best_score"] = 999999.0
+    save_best_pid(config["best_score"])
+    config["tune_axis"] = 0
+    config["tune_direction"] = 1
+    config["step_kp_position"] = 0.04
+    config["step_ki_position"] = 0.0005
+    config["step_kd_position"] = 0.08
+    config["step_kp_heading"] = 0.08
+    config["step_kd_heading"] = 0.05
+
+
+def tune_parameter(axis, delta):
+    if axis == 0:
+        config["kp_position"] = clamp(config["kp_position"] + delta, 0.05, 1.5)
+    elif axis == 1:
+        config["ki_position"] = clamp(config["ki_position"] + delta, 0.0, 0.01)
+    elif axis == 2:
+        config["kd_position"] = clamp(config["kd_position"] + delta, 0.0, 3.0)
+    elif axis == 3:
+        config["kp_heading"] = clamp(config["kp_heading"] + delta, 0.0, 2.5)
+    else:
+        config["kd_heading"] = clamp(config["kd_heading"] + delta, 0.0, 2.0)
+
+
+def propose_next_pid(improved):
+    axis = config["tune_axis"]
+    direction = config["tune_direction"]
+    step_keys = (
+        "step_kp_position",
+        "step_ki_position",
+        "step_kd_position",
+        "step_kp_heading",
+        "step_kd_heading",
+    )
+
+    restore_best_pid()
+    if improved:
+        tune_parameter(axis, config[step_keys[axis]] * direction)
+        return
+
+    if direction == 1:
+        config["tune_direction"] = -1
+        tune_parameter(axis, -config[step_keys[axis]])
+        return
+
+    config[step_keys[axis]] *= 0.65
+    config["tune_axis"] = (axis + 1) % 5
+    config["tune_direction"] = 1
+    next_axis = config["tune_axis"]
+    tune_parameter(next_axis, config[step_keys[next_axis]])
+
+
 def tune_pid():
     global state
     left, right = read_encoders()
     average = (left + right) / 2
     overshoot = average - target_ticks
     heading_error = left - right
+    duration_ms = running_time() - run_started
 
-    if overshoot > POSITION_TOLERANCE_TICKS:
-        config["kd_position"] = min(
-            3.0, config["kd_position"] + min(0.20, overshoot * 0.01)
-        )
-        config["kp_position"] = max(0.08, config["kp_position"] * 0.97)
-    elif overshoot < -POSITION_TOLERANCE_TICKS:
-        config["kp_position"] = min(1.5, config["kp_position"] + 0.02)
-
-    if abs(heading_error) > 3:
-        config["kp_heading"] = min(2.5, config["kp_heading"] + 0.03)
-        config["kd_heading"] = min(2.0, config["kd_heading"] + 0.02)
+    # Overshoot is penalized more strongly than stopping short. Heading error
+    # and a small duration cost prevent a slow but inaccurate optimum.
+    score = (
+        abs(overshoot) * 10
+        + max(0, overshoot) * 20
+        + abs(heading_error) * 2
+        + duration_ms / 1000
+    )
+    improved = score < config["best_score"]
+    tested_pid = (
+        config["kp_position"], config["ki_position"], config["kd_position"],
+        config["kp_heading"], config["kd_heading"],
+    )
+    if improved:
+        save_best_pid(score)
 
     config["pid_trials"] += 1
+    propose_next_pid(improved)
     save_config()
     append_history(
-        "PID trial={} target={} final={} overshoot={} heading_error={} "
-        "kp={} ki={} kd={} kh={} dh={}".format(
-            config["pid_trials"], target_ticks, average, overshoot,
-            heading_error, config["kp_position"], config["ki_position"],
-            config["kd_position"], config["kp_heading"],
-            config["kd_heading"],
+        "PID trial={} score={} improved={} target={} final={} overshoot={} "
+        "heading_error={} duration_ms={} tested_pid={} next_pid={}".format(
+            config["pid_trials"], score, improved,
+            target_ticks, average, overshoot,
+            heading_error, duration_ms, tested_pid,
+            (config["kp_position"], config["ki_position"],
+             config["kd_position"], config["kp_heading"],
+             config["kd_heading"]),
         )
     )
     state = PID_TUNE_WAIT
     display.show("P")
     print(
-        "PID_TRIAL_RESULT trial={} overshoot={} heading_error={} "
-        "kp={} ki={} kd={} kh={} dh={}".format(
-            config["pid_trials"], overshoot, heading_error,
+        "PID_RESULT trial={} score={} best={} overshoot={} heading={} "
+        "next_p={} next_i={} next_d={}".format(
+            config["pid_trials"], score, config["best_score"],
+            overshoot, heading_error,
             config["kp_position"], config["ki_position"],
-            config["kd_position"], config["kp_heading"],
-            config["kd_heading"],
+            config["kd_position"],
         )
     )
     print("PID_TUNE_READY place at start, A=trial B=finish")
@@ -375,6 +486,8 @@ def handle_b():
     elif state == MANUAL_CALIBRATION:
         finish_manual_calibration()
     elif state == PID_TUNE_WAIT:
+        restore_best_pid()
+        save_config()
         enter_idle()
     elif state in (RUNNING, SETTLING, HOLDING):
         enter_idle()
@@ -392,6 +505,8 @@ def handle_combo():
 
 
 load_config()
+if config["best_score"] < 999999.0:
+    restore_best_pid()
 
 try:
     while True:
