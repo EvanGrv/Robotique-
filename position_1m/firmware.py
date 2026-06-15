@@ -85,11 +85,14 @@ def pid():
         motor(KP * error_ticks + KI * integral + KD * derivative)
 
 
+display.show(Image.NO)
+print("WAITING_MAQUEEN")
 while ADDR not in i2c.scan():
     sleep(100)
 
 reset()
 display.show("C")
+print("READY_CALIBRATION")
 
 while True:
     both = button_a.is_pressed() and button_b.is_pressed()
