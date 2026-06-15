@@ -51,12 +51,12 @@ vitesse envoye a la Maqueen :
 erreur_ticks = ticks_cible - ticks_actuels
 commande = minimum_directionnel + KP * erreur_ticks
 
-KP, KI, KD = 3, 0, 0
-MIN_SPEED = 50
-MAX_SPEED = 240
+KP, KI, KD = 2.5, 0, 0
+MIN_SPEED = 45
+MAX_SPEED = 200
 TOLERANCE_TICKS = 4
 ```
 
 La commande reste nulle dans une zone de `4 ticks`. Hors de cette zone, elle
-commence avec une valeur minimale de `50`, puis augmente de `3` pour chaque
-tick d'erreur jusqu'a la limite materielle de `240`.
+commence avec une valeur minimale de `45`, puis augmente de `2.5` pour chaque
+tick d'erreur jusqu'a la limite configuree de `200`.

@@ -2,9 +2,9 @@ from microbit import *
 
 
 ADDR = 0x10
-KP, KI, KD = 3, 0, 0
-MIN_SPEED = 50
-MAX_SPEED = 240
+KP, KI, KD = 2.5, 0, 0
+MIN_SPEED = 45
+MAX_SPEED = 200
 TOLERANCE_TICKS = 4
 
 ticks_per_meter = 0
