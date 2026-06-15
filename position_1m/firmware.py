@@ -14,6 +14,8 @@ THEORETICAL_TICKS_PER_METER = (
 CONTROL_PERIOD_MS = 50
 POSITION_TOLERANCE_TICKS = 2
 INTEGRAL_LIMIT = 1500
+MAX_RUN_TIME_MS = 20000
+MAX_OVERSHOOT_TICKS = 30
 MAX_SPEED = 80
 APPROACH_SPEED = 38
 APPROACH_ZONE_TICKS = 80
@@ -22,7 +24,7 @@ MIN_MOVING_SPEED = 20
 IDLE = 0
 DISTANCE_SELECT = 1
 MANUAL_CALIBRATION = 2
-HOLDING_POSITION = 3
+RUNNING_TO_TARGET = 3
 
 config = {
     "ticks_per_meter": 539.0,
@@ -58,6 +60,7 @@ previous_position_error = 0
 previous_heading_error = 0
 last_control_time = running_time()
 last_report_time = running_time()
+run_started = 0
 
 
 def clamp(value, minimum, maximum):
@@ -124,18 +127,13 @@ def reset_encoders():
     write_register(0x04, (0, 0, 0))
 
 
-def motor_values(command):
-    direction = 1 if command >= 0 else 2
-    speed = int(clamp(abs(command), 0, 240))
-    return direction if speed else 0, speed
-
-
-def set_motors(left_command, right_command):
-    left_direction, left_speed = motor_values(left_command)
-    right_direction, right_speed = motor_values(right_command)
+def set_motors(left_speed, right_speed):
+    left_speed = int(clamp(left_speed, 0, 240))
+    right_speed = int(clamp(right_speed, 0, 240))
     write_register(
         0x00,
-        (left_direction, left_speed, right_direction, right_speed),
+        (1 if left_speed else 0, left_speed,
+         1 if right_speed else 0, right_speed),
     )
 
 
@@ -165,17 +163,18 @@ def enter_idle():
     print("IDLE A=set_origin_and_hold B=distance AB=calibrate_1m")
 
 
-def start_holding():
-    global state, target_ticks
+def start_run():
+    global state, target_ticks, run_started
     stop_motors()
     reset_encoders()
     target_ticks = int(
         config["ticks_per_meter"] * config["distance_cm"] / 100
     )
     reset_pid(target_ticks)
-    state = HOLDING_POSITION
-    display.show(Image.TARGET)
-    print("HOLDING origin=0 distance_cm={} target_ticks={}".format(
+    run_started = running_time()
+    state = RUNNING_TO_TARGET
+    display.show(Image.ARROW_N)
+    print("RUN origin=0 distance_cm={} target_ticks={}".format(
         config["distance_cm"], target_ticks
     ))
 
@@ -231,7 +230,7 @@ def report_status():
 
 
 def control_step():
-    global position_integral, previous_position_error, previous_heading_error
+    global state, position_integral, previous_position_error, previous_heading_error
     global last_control_time
 
     now = running_time()
@@ -246,12 +245,26 @@ def control_step():
     position_error = target_ticks - average
     heading_error = left - right
 
-    if abs(position_error) <= POSITION_TOLERANCE_TICKS:
+    if average > target_ticks + MAX_OVERSHOOT_TICKS:
+        emergency_stop()
+        print("SAFETY_OVERSHOOT average={} target={}".format(
+            average, target_ticks
+        ))
+        return
+
+    if position_error <= POSITION_TOLERANCE_TICKS:
         stop_motors()
+        state = IDLE
         position_integral = 0.0
-        previous_position_error = position_error
-        previous_heading_error = heading_error
         display.show(Image.TARGET)
+        print("TARGET_REACHED average={} target={} error={}".format(
+            average, target_ticks, position_error
+        ))
+        return
+
+    if running_time() - run_started > MAX_RUN_TIME_MS:
+        emergency_stop()
+        print("SAFETY_TIMEOUT")
         return
 
     position_integral = clamp(
@@ -272,23 +285,21 @@ def control_step():
         if abs(position_error) < APPROACH_ZONE_TICKS
         else MAX_SPEED
     )
-    common_command = clamp(common_command, -speed_limit, speed_limit)
+    common_command = clamp(common_command, 0, speed_limit)
 
     if abs(common_command) < MIN_MOVING_SPEED:
-        common_command = sign(common_command) * MIN_MOVING_SPEED
+        common_command = MIN_MOVING_SPEED
 
     heading_correction = (
         config["kp_heading"] * heading_error
         + config["kd_heading"] * heading_derivative
     )
 
-    # Heading correction changes sign when driving backwards.
-    correction_sign = sign(common_command)
-    left_command = common_command - correction_sign * heading_correction
-    right_command = common_command + correction_sign * heading_correction
+    left_command = common_command - heading_correction
+    right_command = common_command + heading_correction
     set_motors(left_command, right_command)
 
-    display.show(Image.ARROW_N if common_command > 0 else Image.ARROW_S)
+    display.show(Image.ARROW_N)
     previous_position_error = position_error
     previous_heading_error = heading_error
 
@@ -297,7 +308,7 @@ def handle_a():
     global state
     if state == IDLE:
         if config["calibrated"]:
-            start_holding()
+            start_run()
         else:
             display.show(Image.NO)
             print("CALIBRATION_REQUIRED use A+B")
@@ -318,13 +329,13 @@ def handle_b():
         enter_idle()
     elif state == MANUAL_CALIBRATION:
         finish_manual_calibration()
-    elif state == HOLDING_POSITION:
+    elif state == RUNNING_TO_TARGET:
         enter_idle()
 
 
 def handle_combo():
     global state
-    if state == HOLDING_POSITION:
+    if state == RUNNING_TO_TARGET:
         emergency_stop()
     else:
         stop_motors()
@@ -372,7 +383,7 @@ try:
                 if button_b.was_pressed():
                     handle_b()
 
-            if state == HOLDING_POSITION:
+            if state == RUNNING_TO_TARGET:
                 control_step()
 
             if running_time() - last_report_time >= 1000:

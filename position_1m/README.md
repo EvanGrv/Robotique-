@@ -1,4 +1,4 @@
-# Position absolue par odometrie des roues
+# Parcours mesure par odometrie des roues
 
 Le robot utilise uniquement les encodeurs des roues. La conversion theorique
 est :
@@ -34,14 +34,14 @@ firmware sauvegarde la moyenne cumulative de toutes les mesures comme
 Repetez cette procedure au moins cinq fois pour reduire l'erreur de placement
 manuel. La valeur sauvegardee converge vers la moyenne des mesures.
 
-## Maintenir une position cible
+## Parcourir une distance cible
 
 Au repos :
 
 - `B` ouvre le choix de distance.
 - Dans le choix de distance, `A` ajoute `10 cm` et `B` sauvegarde.
-- `A` definit la position actuelle comme origine `0`, calcule la cible absolue
-  et active son maintien.
+- `A` definit la position actuelle comme origine `0`, calcule la cible et lance
+  le parcours vers l'avant.
 
 Exemple pour une cible de `1 m` :
 
@@ -51,16 +51,11 @@ cible = ticks_par_metre
 erreur = cible - position_actuelle
 ```
 
-Le PID commande les moteurs dans les deux sens :
+Le PID commande uniquement le mouvement vers l'avant. Lorsque la cible est
+atteinte, les moteurs sont arretes et le parcours se termine. Une limite de
+temps et une limite de depassement provoquent aussi un arret de securite.
 
-- erreur positive : avancer ;
-- erreur negative : reculer ;
-- erreur proche de zero : arreter.
-
-Si le robot est recule en faisant tourner ses roues, ses ticks diminuent et le
-PID le fait avancer jusqu'a la cible. S'il est pousse au-dela, il recule.
-
-`B` ou `A+B` arrete le maintien.
+`B` ou `A+B` arrete le parcours.
 
 ## Point de reference
 
@@ -69,8 +64,12 @@ Pour partir depuis une position deja situee a `10 cm` du debut physique, il faut
 que cette position soit connue dans les ticks. Si `A` est presse a cet endroit,
 il devient volontairement la nouvelle origine `0`.
 
-Le robot ne peut pas connaitre un deplacement effectue en le soulevant, car les
-roues et les encodeurs ne tournent pas.
+Le robot ne peut pas connaitre un deplacement effectue en le soulevant.
+
+Les compteurs exposes par la Maqueen Plus V1 augmentent egalement lors d'un
+recul manuel. Ils ne donnent donc pas le signe de la rotation. Avec ces seuls
+compteurs, le robot ne peut pas distinguer un avancement d'un recul manuel et
+ne peut pas revenir automatiquement a une position apres avoir ete recule.
 
 ## PID
 
