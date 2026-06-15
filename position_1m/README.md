@@ -44,12 +44,19 @@ Etats affiches :
 - fleche haute/basse : correction PID ;
 - cible : position `1 m` maintenue.
 
-Le PID initialise l'integrale et l'erreur precedente a zero avant chaque
-trajet. Les gains actuels sont :
+Le PID travaille directement avec l'erreur en ticks et produit l'octet de
+vitesse envoye a la Maqueen :
 
 ```python
-KP, KI, KD = 350, 0, 0
+erreur_ticks = ticks_cible - ticks_actuels
+commande = minimum_directionnel + KP * erreur_ticks
+
+KP, KI, KD = 3, 0, 0
+MIN_SPEED = 50
+MAX_SPEED = 240
+TOLERANCE_TICKS = 4
 ```
 
-Un seul trajet manuel calibre les ticks par metre. Il ne permet pas de calculer
-automatiquement des gains PID optimaux.
+La commande reste nulle dans une zone de `4 ticks`. Hors de cette zone, elle
+commence avec une valeur minimale de `50`, puis augmente de `3` pour chaque
+tick d'erreur jusqu'a la limite materielle de `240`.

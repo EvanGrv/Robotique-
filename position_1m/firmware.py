@@ -2,7 +2,10 @@ from microbit import *
 
 
 ADDR = 0x10
-KP, KI, KD = 350, 0, 0
+KP, KI, KD = 3, 0, 0
+MIN_SPEED = 50
+MAX_SPEED = 240
+TOLERANCE_TICKS = 4
 
 ticks_per_meter = 0
 position_ticks = 0
@@ -29,7 +32,7 @@ def direction(value):
 
 
 def motor(command):
-    speed = min(80, max(20, int(abs(command)))) if command else 0
+    speed = min(MAX_SPEED, int(abs(command))) if command else 0
     direct = 1 if command > 0 else 2 if command < 0 else 0
     i2c.write(ADDR, bytes([0, direct, speed, direct, speed]))
 
@@ -60,11 +63,17 @@ def update_position():
 
 def pid():
     global integral, previous_error
-    error = 1 - position_ticks / ticks_per_meter
-    integral += error * 0.01
-    derivative = (error - previous_error) / 0.01
-    previous_error = error
-    motor(0 if abs(error) < 0.005 else KP * error + KI * integral + KD * derivative)
+    error_ticks = ticks_per_meter - position_ticks
+    integral += error_ticks * 0.01
+    derivative = (error_ticks - previous_error) / 0.01
+    previous_error = error_ticks
+
+    if abs(error_ticks) <= TOLERANCE_TICKS:
+        motor(0)
+    else:
+        correction = KP * error_ticks + KI * integral + KD * derivative
+        command = (MIN_SPEED if correction > 0 else -MIN_SPEED) + correction
+        motor(command)
 
 
 while ADDR not in i2c.scan():
