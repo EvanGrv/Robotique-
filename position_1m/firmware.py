@@ -5,26 +5,29 @@ MAQUEEN_ADDRESS = 0x10
 CONFIG_FILE = "position_config.txt"
 
 WHEEL_RADIUS_M = 0.0215
-WHEEL_BASE_M = 0.085
 ENCODER_COUNTS_PER_REVOLUTION = 80
 THEORETICAL_TICKS_PER_METER = (
     ENCODER_COUNTS_PER_REVOLUTION / (2 * 3.14159265 * WHEEL_RADIUS_M)
 )
 
-CONTROL_PERIOD_MS = 10
-POSITION_TOLERANCE_TICKS = 2
-MAX_RUN_TIME_MS = 20000
-MAX_OVERSHOOT_TICKS = 30
-MAX_DELTA_TICKS = 100
+# Controller based directly on distance:
+# motor_command = distance_error_m * POSITION_KP
+POSITION_KP = 200.0
+HEADING_KP = 400.0
+
+LOOP_DELAY_MS = 10
+POSITION_TOLERANCE_M = 0.005
+APPROACH_ZONE_M = 0.15
 MAX_SPEED = 80
 APPROACH_SPEED = 38
-APPROACH_ZONE_TICKS = 80
-MIN_MOVING_SPEED = 20
+MIN_SPEED = 20
+MAX_RUN_TIME_MS = 30000
+MAX_RAW_DELTA_TICKS = 100
 
 IDLE = 0
 DISTANCE_SELECT = 1
-MANUAL_CALIBRATION = 2
-RUNNING_TO_TARGET = 3
+CALIBRATION = 2
+MOVING = 3
 
 config = {
     "ticks_per_meter": THEORETICAL_TICKS_PER_METER,
@@ -32,11 +35,6 @@ config = {
     "calibration_samples": 0,
     "calibration_ticks_total": 0.0,
     "distance_cm": 100,
-    "kp_position": 0.3686,
-    "ki_position": 0.0,
-    "kd_position": 0.58,
-    "kp_heading": 0.75,
-    "kd_heading": 0.35,
 }
 CONFIG_KEYS = (
     "ticks_per_meter",
@@ -44,25 +42,18 @@ CONFIG_KEYS = (
     "calibration_samples",
     "calibration_ticks_total",
     "distance_cm",
-    "kp_position",
-    "ki_position",
-    "kd_position",
-    "kp_heading",
-    "kd_heading",
 )
 
 state = IDLE
 connected = False
 combo_latched = False
-target_ticks = 0
-last_control_time = running_time()
-last_report_time = running_time()
 run_started = 0
+
 left_raw_previous = 0
 right_raw_previous = 0
-left_position_ticks = 0
-right_position_ticks = 0
-manual_motion_unknown = False
+left_position_m = 0.0
+right_position_m = 0.0
+manual_direction_unknown = False
 
 
 def clamp(value, minimum, maximum):
@@ -114,7 +105,11 @@ def write_register(register, values=()):
     i2c.write(MAQUEEN_ADDRESS, bytes([register] + list(values)))
 
 
-def read_raw_encoders():
+def reset_encoder_counters():
+    write_register(0x04, (0, 0, 0))
+
+
+def read_raw_encoder_counters():
     write_register(0x04)
     data = i2c.read(MAQUEEN_ADDRESS, 4)
     return (data[0] << 8) | data[1], (data[2] << 8) | data[3]
@@ -134,54 +129,58 @@ def direction_sign(direction):
     return 0
 
 
-def raw_delta(current, previous):
+def raw_counter_delta(current, previous):
     delta = (current - previous) & 0xFFFF
-    return delta if delta <= MAX_DELTA_TICKS else 0
+    if delta > MAX_RAW_DELTA_TICKS:
+        print("IGNORED_DELTA", delta)
+        return 0
+    return delta
 
 
 def reset_position():
     global left_raw_previous, right_raw_previous
-    global left_position_ticks, right_position_ticks, manual_motion_unknown
-    reset_encoders()
-    left_raw_previous, right_raw_previous = read_raw_encoders()
-    left_position_ticks = 0
-    right_position_ticks = 0
-    manual_motion_unknown = False
+    global left_position_m, right_position_m, manual_direction_unknown
+
+    reset_encoder_counters()
+    left_raw_previous, right_raw_previous = read_raw_encoder_counters()
+    left_position_m = 0.0
+    right_position_m = 0.0
+    manual_direction_unknown = False
 
 
 def update_position():
     global left_raw_previous, right_raw_previous
-    global left_position_ticks, right_position_ticks, manual_motion_unknown
+    global left_position_m, right_position_m, manual_direction_unknown
 
-    left_raw, right_raw = read_raw_encoders()
+    left_raw, right_raw = read_raw_encoder_counters()
     left_direction, right_direction = read_motor_directions()
-    left_delta = raw_delta(left_raw, left_raw_previous)
-    right_delta = raw_delta(right_raw, right_raw_previous)
 
+    left_delta = raw_counter_delta(left_raw, left_raw_previous)
+    right_delta = raw_counter_delta(right_raw, right_raw_previous)
     left_sign = direction_sign(left_direction)
     right_sign = direction_sign(right_direction)
-    if (left_delta and not left_sign) or (right_delta and not right_sign):
-        manual_motion_unknown = True
 
-    left_position_ticks += left_delta * left_sign
-    right_position_ticks += right_delta * right_sign
+    if (left_delta and not left_sign) or (right_delta and not right_sign):
+        manual_direction_unknown = True
+
+    left_position_m += left_delta * left_sign / config["ticks_per_meter"]
+    right_position_m += right_delta * right_sign / config["ticks_per_meter"]
     left_raw_previous = left_raw
     right_raw_previous = right_raw
-    return left_position_ticks, right_position_ticks
 
-
-def reset_encoders():
-    write_register(0x04, (0, 0, 0))
+    return left_position_m, right_position_m
 
 
 def motor_values(command):
     speed = int(clamp(abs(command), 0, 240))
-    if not speed:
+    if speed == 0:
         return 0, 0
-    return (1 if command > 0 else 2), speed
+    if command > 0:
+        return 1, speed
+    return 2, speed
 
 
-def set_signed_motors(left_command, right_command):
+def set_motors(left_command, right_command):
     left_direction, left_speed = motor_values(left_command)
     right_direction, right_speed = motor_values(right_command)
     write_register(
@@ -194,11 +193,6 @@ def stop_motors():
     write_register(0x00, (0, 0, 0, 0))
 
 
-def reset_controller():
-    global last_control_time
-    last_control_time = running_time()
-
-
 def show_distance():
     display.scroll(str(config["distance_cm"]) + "cm", wait=True, loop=False)
     display.show(Image.SQUARE_SMALL)
@@ -209,41 +203,77 @@ def enter_idle():
     stop_motors()
     state = IDLE
     display.show(Image.SQUARE_SMALL)
-    print("IDLE A=set_origin_and_hold B=distance AB=calibrate_1m")
+    print("IDLE A=move B=distance AB=calibrate")
 
 
-def start_run():
-    global state, target_ticks, run_started
-    stop_motors()
+def start_move():
+    global state, run_started
     reset_position()
-    target_ticks = int(
-        config["ticks_per_meter"] * config["distance_cm"] / 100
-    )
-    reset_controller()
     run_started = running_time()
-    state = RUNNING_TO_TARGET
+    state = MOVING
     display.show(Image.ARROW_N)
-    print("RUN origin=0 distance_cm={} target_ticks={}".format(
-        config["distance_cm"], target_ticks
-    ))
+    print("MOVE target_m={}".format(config["distance_cm"] / 100))
 
 
-def emergency_stop():
+def emergency_stop(reason):
     global state
     stop_motors()
     state = IDLE
     display.show(Image.NO)
-    print("EMERGENCY_STOP")
+    print("EMERGENCY_STOP", reason)
 
 
-def finish_manual_calibration():
+def update_motors():
     global state
-    left_raw, right_raw = read_raw_encoders()
-    left, right = left_raw, right_raw
-    measured_ticks = (abs(left) + abs(right)) / 2
+
+    left_m, right_m = update_position()
+    position_m = (left_m + right_m) / 2
+    target_m = config["distance_cm"] / 100
+    distance_error_m = target_m - position_m
+    heading_error_m = left_m - right_m
+
+    if manual_direction_unknown:
+        emergency_stop("manual_direction_unknown")
+        return
+
+    if abs(distance_error_m) <= POSITION_TOLERANCE_M:
+        stop_motors()
+        state = IDLE
+        display.show(Image.TARGET)
+        print("TARGET position_m={} error_m={}".format(
+            position_m, distance_error_m
+        ))
+        return
+
+    if running_time() - run_started > MAX_RUN_TIME_MS:
+        emergency_stop("timeout")
+        return
+
+    common_command = POSITION_KP * distance_error_m
+    speed_limit = (
+        APPROACH_SPEED
+        if abs(distance_error_m) < APPROACH_ZONE_M
+        else MAX_SPEED
+    )
+    common_command = clamp(common_command, -speed_limit, speed_limit)
+    if abs(common_command) < MIN_SPEED:
+        common_command = sign(common_command) * MIN_SPEED
+
+    heading_correction = HEADING_KP * heading_error_m
+    movement_sign = sign(common_command)
+    left_command = common_command - movement_sign * heading_correction
+    right_command = common_command + movement_sign * heading_correction
+    set_motors(left_command, right_command)
+
+    display.show(Image.ARROW_N if common_command > 0 else Image.ARROW_S)
+
+
+def finish_calibration():
+    left_raw, right_raw = read_raw_encoder_counters()
+    measured_ticks = (left_raw + right_raw) / 2
     if measured_ticks < 100:
         display.show(Image.NO)
-        print("CALIBRATION_REJECTED left={} right={}".format(left, right))
+        print("CALIBRATION_REJECTED", measured_ticks)
         return
 
     config["calibration_samples"] += 1
@@ -253,103 +283,34 @@ def finish_manual_calibration():
     )
     config["calibrated"] = True
     save_config()
-    print(
-        "CALIBRATION_SAVED sample={} measured={} average={} theoretical={} "
-        "left={} right={}".format(
-            config["calibration_samples"], measured_ticks,
-            config["ticks_per_meter"], THEORETICAL_TICKS_PER_METER, left, right
-        )
-    )
+    print("CALIBRATION sample={} measured={} average={}".format(
+        config["calibration_samples"], measured_ticks,
+        config["ticks_per_meter"],
+    ))
     enter_idle()
 
 
 def report_status():
-    left, right = update_position()
-    average = (left + right) / 2
-    distance_m = average / config["ticks_per_meter"]
-    heading_rad = (
-        (right - left) / config["ticks_per_meter"] / WHEEL_BASE_M
-    )
+    left_m, right_m = update_position()
+    position_m = (left_m + right_m) / 2
     print(
-        "STATUS state={} left={} right={} average={} distance_m={} "
-        "heading_rad={} target_ticks={} error={} manual_unknown={}".format(
-            state, left, right, average, distance_m, heading_rad,
-            target_ticks, target_ticks - average, manual_motion_unknown,
+        "STATUS state={} left_m={} right_m={} position_m={} target_m={} "
+        "error_m={} directions_unknown={}".format(
+            state, left_m, right_m, position_m, config["distance_cm"] / 100,
+            config["distance_cm"] / 100 - position_m,
+            manual_direction_unknown,
         )
     )
-
-
-def control_step():
-    global state, last_control_time
-
-    now = running_time()
-    elapsed_ms = now - last_control_time
-    if elapsed_ms < CONTROL_PERIOD_MS:
-        return
-
-    last_control_time = now
-    left, right = update_position()
-    average = (left + right) / 2
-    position_error = target_ticks - average
-    heading_error = left - right
-
-    if manual_motion_unknown:
-        emergency_stop()
-        print("SAFETY_MANUAL_DIRECTION_UNKNOWN")
-        return
-
-    if average > target_ticks + MAX_OVERSHOOT_TICKS:
-        emergency_stop()
-        print("SAFETY_OVERSHOOT average={} target={}".format(
-            average, target_ticks
-        ))
-        return
-
-    if abs(position_error) <= POSITION_TOLERANCE_TICKS:
-        stop_motors()
-        state = IDLE
-        display.show(Image.TARGET)
-        print("TARGET_REACHED average={} target={} error={}".format(
-            average, target_ticks, position_error
-        ))
-        return
-
-    if running_time() - run_started > MAX_RUN_TIME_MS:
-        emergency_stop()
-        print("SAFETY_TIMEOUT")
-        return
-
-    # Position controller from the provided model: command = error_ticks * P.
-    # No time integral or derivative is used here.
-    common_command = config["kp_position"] * position_error
-    speed_limit = (
-        APPROACH_SPEED
-        if abs(position_error) < APPROACH_ZONE_TICKS
-        else MAX_SPEED
-    )
-    common_command = clamp(common_command, -speed_limit, speed_limit)
-
-    if abs(common_command) < MIN_MOVING_SPEED:
-        common_command = sign(common_command) * MIN_MOVING_SPEED
-
-    heading_correction = config["kp_heading"] * heading_error
-
-    correction_sign = sign(common_command)
-    left_command = common_command - correction_sign * heading_correction
-    right_command = common_command + correction_sign * heading_correction
-    set_signed_motors(left_command, right_command)
-
-    display.show(Image.ARROW_N if common_command > 0 else Image.ARROW_S)
 
 
 def handle_a():
     global state
     if state == IDLE:
         if config["calibrated"]:
-            start_run()
+            start_move()
         else:
             display.show(Image.NO)
-            print("CALIBRATION_REQUIRED use A+B")
+            print("CALIBRATION_REQUIRED")
     elif state == DISTANCE_SELECT:
         config["distance_cm"] += 10
         if config["distance_cm"] > 500:
@@ -365,22 +326,23 @@ def handle_b():
     elif state == DISTANCE_SELECT:
         save_config()
         enter_idle()
-    elif state == MANUAL_CALIBRATION:
-        finish_manual_calibration()
-    elif state == RUNNING_TO_TARGET:
+    elif state == CALIBRATION:
+        finish_calibration()
+    elif state == MOVING:
         enter_idle()
 
 
 def handle_combo():
     global state
-    if state == RUNNING_TO_TARGET:
-        emergency_stop()
-    else:
-        stop_motors()
-        reset_encoders()
-        state = MANUAL_CALIBRATION
-        display.show("C")
-        print("CALIBRATION_STARTED move exactly 1m then press B")
+    if state == MOVING:
+        emergency_stop("buttons")
+        return
+
+    stop_motors()
+    reset_encoder_counters()
+    state = CALIBRATION
+    display.show("C")
+    print("CALIBRATION move exactly 1m then press B")
 
 
 load_config()
@@ -395,12 +357,9 @@ try:
             write_register(0x0A, (0,))
             connected = True
             enter_idle()
-            print(
-                "READY ticks_per_meter={} theoretical={} distance_cm={}".format(
-                    config["ticks_per_meter"], THEORETICAL_TICKS_PER_METER,
-                    config["distance_cm"],
-                )
-            )
+            print("READY ticks_per_meter={} calibrated={}".format(
+                config["ticks_per_meter"], config["calibrated"]
+            ))
 
         try:
             both_pressed = button_a.is_pressed() and button_b.is_pressed()
@@ -421,14 +380,14 @@ try:
                 if button_b.was_pressed():
                     handle_b()
 
-            if state == RUNNING_TO_TARGET:
-                control_step()
+            if state == MOVING:
+                update_motors()
 
             if running_time() - last_report_time >= 1000:
                 last_report_time = running_time()
                 report_status()
 
-            sleep(10)
+            sleep(LOOP_DELAY_MS)
         except OSError as error:
             state = IDLE
             connected = False
