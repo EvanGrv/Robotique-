@@ -1,61 +1,32 @@
-# Controle simple de position
+# Position 1 m - base minimale
 
-Le firmware applique directement cette boucle :
+Le firmware contient uniquement :
 
-```text
-while:
-    update_position()
-    move_to(1 m)
-    sleep(10 ms)
+1. `coders()` et `directions()` pour lire la Maqueen.
+2. `update_position()` pour cumuler les ticks signes.
+3. `motor()` pour avancer ou reculer.
+4. `move_to()` pour calculer le PID.
+
+## Premier test
+
+1. Appuyer sur `A+B` pour remettre les compteurs a zero.
+2. Faire rouler manuellement le robot sur exactement `1 m`.
+3. Appuyer sur `B`.
+
+Le nombre moyen de ticks mesure devient `ticks_per_meter`.
+
+## Utilisation
+
+- `A` : aller a la position `1 m`.
+- `B` : arreter et remettre la position a zero.
+- `A+B` : refaire la mesure manuelle de `1 m`.
+
+Le PID initialise l'integrale et l'erreur precedente a zero avant chaque
+trajet. Les gains actuels sont :
+
+```python
+KP, KI, KD = 200, 0, 0
 ```
 
-## Calcul de la position
-
-Chaque compteur de roue augmente positivement. Le registre de direction permet
-de savoir si les ticks doivent etre ajoutes ou retires :
-
-```text
-delta = compteur_actuel - compteur_precedent
-ticks_cumules += delta * direction
-
-direction avant   = +1
-direction arriere = -1
-direction arret   = 0
-```
-
-Un saut impossible superieur a `100 ticks` entre deux boucles est ignore. Cela
-evite qu'une difference negative interpretee sur 16 bits devienne `65535
-ticks`, soit environ `110 m`.
-
-La distance moyenne est :
-
-```text
-distance_m = ((ticks_gauche + ticks_droite) / 2) / ticks_par_metre
-```
-
-La valeur theorique utilisee est :
-
-```text
-ticks_par_metre = 80 / (2 * pi * 0.0215)
-                 = environ 592.2
-```
-
-## Commande proportionnelle
-
-```text
-erreur_m = 1.0 - distance_m
-commande = erreur_m * KP
-```
-
-- commande positive : direction `1`, avance ;
-- commande negative : direction `2`, recule avec une vitesse `-commande` ;
-- commande nulle : arret.
-
-## Boutons
-
-- `A` : aller vers la position `1 m`.
-- `B` : arreter le robot.
-- `A+B` : arreter et remettre a zero les compteurs materiels, les anciens
-  compteurs et la position cumulee.
-
-Le robot affiche son etat chaque seconde sur le port serie.
+Un seul trajet manuel calibre les ticks par metre. Il ne permet pas de calculer
+automatiquement des gains PID optimaux.

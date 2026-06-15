@@ -1,190 +1,114 @@
 from microbit import *
 
 
-MAQUEEN_ADDRESS = 0x10
-
-WHEEL_RADIUS_M = 0.0215
-TICKS_PER_WHEEL_REVOLUTION = 80
-TICKS_PER_METER = TICKS_PER_WHEEL_REVOLUTION / (
-    2 * 3.14159265 * WHEEL_RADIUS_M
-)
-
+ADDRESS = 0x10
 TARGET_M = 1.0
-KP = 200
-MAX_SPEED = 80
-MIN_SPEED = 20
-TOLERANCE_M = 0.005
-LOOP_DELAY_MS = 10
-MAX_DELTA_TICKS = 100
+KP, KI, KD = 200, 0, 0
 
+ticks_per_meter = 0
+ticks = 0
+previous_left = 0
+previous_right = 0
+integral = 0
+previous_error = 0
 moving = False
-combo_latched = False
-last_report_time = running_time()
-
-left_previous = 0
-right_previous = 0
-left_ticks = 0
-right_ticks = 0
 
 
-def clamp(value, minimum, maximum):
-    return max(minimum, min(maximum, value))
+def read(register):
+    i2c.write(ADDRESS, bytes([register]))
+    return i2c.read(ADDRESS, 4)
 
 
-def write_register(register, values=()):
-    i2c.write(MAQUEEN_ADDRESS, bytes([register] + list(values)))
+def coders():
+    data = read(0x04)
+    return (data[0] << 8) | data[1], (data[2] << 8) | data[3]
 
 
-def read_coders():
-    write_register(0x04)
-    data = i2c.read(MAQUEEN_ADDRESS, 4)
-    left = (data[0] << 8) | data[1]
-    right = (data[2] << 8) | data[3]
-    return left, right
-
-
-def read_directions():
-    write_register(0x00)
-    data = i2c.read(MAQUEEN_ADDRESS, 4)
+def directions():
+    data = read(0x00)
     return data[0], data[2]
 
 
-def direction_sign(direction):
-    if direction == 1:
-        return 1
-    if direction == 2:
-        return -1
-    return 0
+def sign(direction):
+    return 1 if direction == 1 else -1 if direction == 2 else 0
 
 
-def coder_delta(current, previous):
-    delta = (current - previous) & 0xFFFF
-    if delta > MAX_DELTA_TICKS:
-        print("DELTA_IGNORED", delta)
-        return 0
-    return delta
+def reset():
+    global ticks, previous_left, previous_right, integral, previous_error, moving
+    motor(0)
+    i2c.write(ADDRESS, bytes([0x04, 0, 0, 0]))
+    sleep(20)
+    previous_left, previous_right = coders()
+    ticks = integral = previous_error = 0
+    moving = False
 
 
 def update_position():
-    global left_previous, right_previous, left_ticks, right_ticks
-
-    left_coder, right_coder = read_coders()
-    left_direction, right_direction = read_directions()
-
-    left_delta = coder_delta(left_coder, left_previous)
-    right_delta = coder_delta(right_coder, right_previous)
-
-    left_ticks += left_delta * direction_sign(left_direction)
-    right_ticks += right_delta * direction_sign(right_direction)
-
-    left_previous = left_coder
-    right_previous = right_coder
-
-
-def position_m():
-    average_ticks = (left_ticks + right_ticks) / 2
-    return average_ticks / TICKS_PER_METER
-
-
-def motor_values(command):
-    if command == 0:
-        return 0, 0
-
-    speed = int(clamp(abs(command), MIN_SPEED, MAX_SPEED))
-    if command > 0:
-        return 1, speed
-    return 2, speed
+    global ticks, previous_left, previous_right
+    left, right = coders()
+    left_direction, right_direction = directions()
+    left_delta = (left - previous_left) & 0xFFFF
+    right_delta = (right - previous_right) & 0xFFFF
+    if left_delta < 100 and right_delta < 100:
+        ticks += (
+            left_delta * sign(left_direction)
+            + right_delta * sign(right_direction)
+        ) / 2
+    previous_left, previous_right = left, right
 
 
 def motor(command):
-    direction, speed = motor_values(command)
-    write_register(0x00, (direction, speed, direction, speed))
+    speed = min(80, max(20, int(abs(command)))) if command else 0
+    direction = 1 if command > 0 else 2 if command < 0 else 0
+    i2c.write(ADDRESS, bytes([0x00, direction, speed, direction, speed]))
 
 
-def stop():
-    global moving
-    motor(0)
-    moving = False
-    display.show(Image.SQUARE_SMALL)
+def move_to(target):
+    global integral, previous_error, moving
+    error = target - ticks / ticks_per_meter
+    integral += error * 0.01
+    derivative = (error - previous_error) / 0.01
+    previous_error = error
+
+    if abs(error) < 0.005:
+        motor(0)
+        moving = False
+    else:
+        motor(KP * error + KI * integral + KD * derivative)
 
 
-def reset_position():
-    global left_previous, right_previous, left_ticks, right_ticks
-
-    stop()
-    write_register(0x04, (0, 0, 0))
-    sleep(20)
-    left_previous, right_previous = read_coders()
-    left_ticks = 0
-    right_ticks = 0
+def calibrate():
+    global ticks_per_meter
+    reset()
+    display.show("C")
+    while button_a.is_pressed() or button_b.is_pressed():
+        sleep(10)
+    button_a.was_pressed()
+    button_b.was_pressed()
+    while not button_b.was_pressed():
+        sleep(10)
+    left, right = coders()
+    ticks_per_meter = (left + right) / 2
+    reset()
     display.show(Image.YES)
-    print("RESET position_m=0 left_ticks=0 right_ticks=0")
 
 
-def move_to(target_m):
-    global moving
+while ADDRESS not in i2c.scan():
+    sleep(100)
 
-    error_m = target_m - position_m()
-    if abs(error_m) <= TOLERANCE_M:
-        stop()
-        display.show(Image.TARGET)
-        print("TARGET position_m={}".format(position_m()))
-        return
+reset()
 
-    command = error_m * KP
-    motor(command)
-    moving = True
-    display.show(Image.ARROW_N if command > 0 else Image.ARROW_S)
+while True:
+    if button_a.is_pressed() and button_b.is_pressed():
+        calibrate()
+        sleep(500)
+    elif button_a.was_pressed() and ticks_per_meter:
+        integral = previous_error = 0
+        moving = True
+    elif button_b.was_pressed():
+        reset()
 
-
-def report_status():
-    left_direction, right_direction = read_directions()
-    print(
-        "STATUS moving={} position_m={} error_m={} "
-        "left_ticks={} right_ticks={} left_dir={} right_dir={}".format(
-            moving,
-            position_m(),
-            TARGET_M - position_m(),
-            left_ticks,
-            right_ticks,
-            left_direction,
-            right_direction,
-        )
-    )
-
-
-while MAQUEEN_ADDRESS not in i2c.scan():
-    display.show(Image.NO)
-    sleep(500)
-
-reset_position()
-print("READY A=move B=stop AB=reset ticks_per_meter={}".format(TICKS_PER_METER))
-
-try:
-    while True:
-        both_pressed = button_a.is_pressed() and button_b.is_pressed()
-
-        if both_pressed and not combo_latched:
-            combo_latched = True
-            reset_position()
-        elif not both_pressed and combo_latched:
-            button_a.was_pressed()
-            button_b.was_pressed()
-            combo_latched = False
-        elif not combo_latched:
-            if button_a.was_pressed():
-                moving = True
-            if button_b.was_pressed():
-                stop()
-
-        update_position()
-        if moving:
-            move_to(TARGET_M)
-
-        if running_time() - last_report_time >= 1000:
-            last_report_time = running_time()
-            report_status()
-
-        sleep(LOOP_DELAY_MS)
-finally:
-    motor(0)
+    update_position()
+    if moving:
+        move_to(TARGET_M)
+    sleep(10)
