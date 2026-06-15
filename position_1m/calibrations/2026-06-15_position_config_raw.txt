@@ -1,9 +1,0 @@
-ticks_per_meter=539.0
-calibrated=True
-distance_cm=100
-kp_position=0.3686
-ki_position=0.0
-kd_position=0.58
-kp_heading=0.75
-kd_heading=0.35
-pid_trials=2

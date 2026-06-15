@@ -8,7 +8,7 @@ UFLASH := .venv/bin/uflash
 UFS := .venv/bin/ufs
 SERIAL_PORT := $(firstword $(wildcard /dev/cu.usbmodem*))
 
-.PHONY: help setup check check-controller flash install run start stop reset status serial read-config read-history
+.PHONY: help setup check check-controller flash install run start stop reset status serial
 
 help:
 	@echo "Projet selectionne : $(PROJECT)"
@@ -17,8 +17,6 @@ help:
 	@echo "make install                  Installe le firmware via le port serie"
 	@echo "make run                      Lance la telecommande si disponible"
 	@echo "make serial                   Ouvre la console serie"
-	@echo "make read-config              Recupere la configuration sauvegardee"
-	@echo "make read-history             Recupere l'historique de calibration"
 	@echo "make run PROJECT=autre_projet Lance un autre projet"
 
 setup:
@@ -59,9 +57,3 @@ status: check-controller
 serial: check
 	@test -n "$(SERIAL_PORT)" || { echo "Erreur : port serie micro:bit introuvable."; exit 1; }
 	$(PYTHON) -m serial.tools.miniterm "$(SERIAL_PORT)" 115200
-
-read-config: check
-	$(UFS) get position_config.txt "$(PROJECT_DIR)/position_config.txt"
-
-read-history: check
-	$(UFS) get calibration_history.txt "$(PROJECT_DIR)/calibration_history.txt"
