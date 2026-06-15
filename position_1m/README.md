@@ -9,8 +9,11 @@ ticks_par_metre = ticks_par_tour / (2 * pi * rayon)
 ```
 
 Avec `rayon = 0,0215 m` et `80 ticks/tour`, la valeur theorique est environ
-`592,20 ticks/m`. Comme les ticks reels exposes par la Maqueen peuvent differer,
-le firmware permet de mesurer puis sauvegarder la valeur reelle.
+`592,20 ticks/m`. Cette valeur est uniquement informative : le firmware refuse
+de lancer un parcours tant qu'une calibration reelle n'a pas ete effectuee.
+
+L'ancienne mesure `539 ticks/m` a ete declaree non fiable et n'est plus utilisee
+comme valeur par defaut.
 
 ## Installation
 
@@ -33,6 +36,9 @@ firmware sauvegarde la moyenne cumulative de toutes les mesures comme
 
 Repetez cette procedure au moins cinq fois pour reduire l'erreur de placement
 manuel. La valeur sauvegardee converge vers la moyenne des mesures.
+
+Un flash complet efface les mesures sauvegardees dans la micro:bit. Il faut
+alors refaire la calibration avant tout parcours.
 
 ## Parcourir une distance cible
 

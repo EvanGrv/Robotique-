@@ -27,10 +27,10 @@ MANUAL_CALIBRATION = 2
 RUNNING_TO_TARGET = 3
 
 config = {
-    "ticks_per_meter": 539.0,
-    "calibrated": True,
-    "calibration_samples": 1,
-    "calibration_ticks_total": 539.0,
+    "ticks_per_meter": THEORETICAL_TICKS_PER_METER,
+    "calibrated": False,
+    "calibration_samples": 0,
+    "calibration_ticks_total": 0.0,
     "distance_cm": 100,
     "kp_position": 0.3686,
     "ki_position": 0.0,
