@@ -27,19 +27,10 @@ Aucune valeur theorique et aucune ancienne calibration ne sont utilisees.
 Le nombre moyen de ticks mesure devient `ticks_per_meter`. La position courante
 devient immediatement `1 m` et le PID commence a la maintenir.
 
-Pendant la calibration et ensuite toutes les `500 ms`, le port serie affiche :
-
-```text
-READ compteur_gauche compteur_droit direction_gauche direction_droite ticks_signes position
-```
-
-Cela permet de verifier directement si l'adresse `0x00` renvoie `1` en poussant
-le robot vers l'avant et `2` en le poussant vers l'arriere.
-
 ## Utilisation
 
 - `A` : reactiver le maintien de la position `1 m`.
-- `B` : mettre le maintien en pause sans modifier la position.
+- `B` pendant la calibration : enregistrer la position `1 m`.
 - `A+B` : refaire la mesure manuelle de `1 m`.
 
 Le zero est cree uniquement au debut de `A+B`. Il n'est jamais recrée lorsque
