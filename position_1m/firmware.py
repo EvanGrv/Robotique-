@@ -3,96 +3,73 @@ from microbit import *
 
 MAQUEEN_ADDRESS = 0x10
 CONFIG_FILE = "position_config.txt"
-HISTORY_FILE = "calibration_history.txt"
 
 WHEEL_RADIUS_M = 0.0215
 WHEEL_BASE_M = 0.085
-DEFAULT_TICKS_PER_METER = 539.0
+ENCODER_COUNTS_PER_REVOLUTION = 80
+THEORETICAL_TICKS_PER_METER = (
+    ENCODER_COUNTS_PER_REVOLUTION / (2 * 3.14159265 * WHEEL_RADIUS_M)
+)
 
 CONTROL_PERIOD_MS = 50
-SETTLE_TIME_MS = 800
 POSITION_TOLERANCE_TICKS = 2
-HOLD_RESTART_TICKS = 5
-
-MAX_SPEED = 85
-APPROACH_SPEED = 42
-APPROACH_ZONE_TICKS = 90
-MIN_SPEED = 24
+INTEGRAL_LIMIT = 1500
+MAX_SPEED = 80
+APPROACH_SPEED = 38
+APPROACH_ZONE_TICKS = 80
+MIN_MOVING_SPEED = 20
 
 IDLE = 0
 DISTANCE_SELECT = 1
-CALIBRATION_MENU = 2
-MANUAL_CALIBRATION = 3
-PID_TUNE_WAIT = 4
-RUNNING = 5
-SETTLING = 6
-HOLDING = 7
+MANUAL_CALIBRATION = 2
+HOLDING_POSITION = 3
 
 config = {
-    "ticks_per_meter": DEFAULT_TICKS_PER_METER,
+    "ticks_per_meter": 539.0,
     "calibrated": True,
+    "calibration_samples": 1,
+    "calibration_ticks_total": 539.0,
     "distance_cm": 100,
     "kp_position": 0.3686,
     "ki_position": 0.0,
     "kd_position": 0.58,
     "kp_heading": 0.75,
     "kd_heading": 0.35,
-    "pid_trials": 2,
-    "best_score": 999999.0,
-    "best_kp_position": 0.3686,
-    "best_ki_position": 0.0,
-    "best_kd_position": 0.58,
-    "best_kp_heading": 0.75,
-    "best_kd_heading": 0.35,
-    "tune_axis": 0,
-    "tune_direction": 1,
-    "step_kp_position": 0.04,
-    "step_ki_position": 0.0005,
-    "step_kd_position": 0.08,
-    "step_kp_heading": 0.08,
-    "step_kd_heading": 0.05,
 }
 CONFIG_KEYS = (
     "ticks_per_meter",
     "calibrated",
+    "calibration_samples",
+    "calibration_ticks_total",
     "distance_cm",
     "kp_position",
     "ki_position",
     "kd_position",
     "kp_heading",
     "kd_heading",
-    "pid_trials",
-    "best_score",
-    "best_kp_position",
-    "best_ki_position",
-    "best_kd_position",
-    "best_kp_heading",
-    "best_kd_heading",
-    "tune_axis",
-    "tune_direction",
-    "step_kp_position",
-    "step_ki_position",
-    "step_kd_position",
-    "step_kp_heading",
-    "step_kd_heading",
 )
 
 state = IDLE
 connected = False
 combo_latched = False
-tuning_trial = False
 target_ticks = 0
-settle_started = 0
 position_integral = 0.0
 previous_position_error = 0
 previous_heading_error = 0
 last_control_time = running_time()
 last_report_time = running_time()
-run_started = 0
 
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
+
+
+def sign(value):
+    if value > 0:
+        return 1
+    if value < 0:
+        return -1
+    return 0
 
 
 def signed_16(msb, lsb):
@@ -133,14 +110,6 @@ def save_config():
         print("ERROR saving config:", error)
 
 
-def append_history(event):
-    try:
-        with open(HISTORY_FILE, "a") as history_file:
-            history_file.write(event + "\n")
-    except OSError as error:
-        print("ERROR saving history:", error)
-
-
 def write_register(register, values=()):
     i2c.write(MAQUEEN_ADDRESS, bytes([register] + list(values)))
 
@@ -155,13 +124,18 @@ def reset_encoders():
     write_register(0x04, (0, 0, 0))
 
 
-def set_motors(left_speed, right_speed):
-    left_speed = int(clamp(left_speed, 0, 240))
-    right_speed = int(clamp(right_speed, 0, 240))
+def motor_values(command):
+    direction = 1 if command >= 0 else 2
+    speed = int(clamp(abs(command), 0, 240))
+    return direction if speed else 0, speed
+
+
+def set_motors(left_command, right_command):
+    left_direction, left_speed = motor_values(left_command)
+    right_direction, right_speed = motor_values(right_command)
     write_register(
         0x00,
-        (1 if left_speed else 0, left_speed,
-         1 if right_speed else 0, right_speed),
+        (left_direction, left_speed, right_direction, right_speed),
     )
 
 
@@ -184,58 +158,81 @@ def show_distance():
 
 
 def enter_idle():
-    global state, tuning_trial
+    global state
     stop_motors()
     state = IDLE
-    tuning_trial = False
     display.show(Image.SQUARE_SMALL)
-    print("IDLE A=run B=distance AB=calibration")
+    print("IDLE A=set_origin_and_hold B=distance AB=calibrate_1m")
 
 
-def start_run(is_tuning=False):
-    global state, target_ticks, tuning_trial, run_started
+def start_holding():
+    global state, target_ticks
     stop_motors()
     reset_encoders()
     target_ticks = int(
         config["ticks_per_meter"] * config["distance_cm"] / 100
     )
     reset_pid(target_ticks)
-    run_started = running_time()
-    tuning_trial = is_tuning
-    state = RUNNING
-    display.show(Image.ARROW_N)
-    print("START distance_cm={} target_ticks={} tuning={}".format(
-        config["distance_cm"], target_ticks, tuning_trial
+    state = HOLDING_POSITION
+    display.show(Image.TARGET)
+    print("HOLDING origin=0 distance_cm={} target_ticks={}".format(
+        config["distance_cm"], target_ticks
     ))
 
 
 def emergency_stop():
-    global state, tuning_trial
+    global state
     stop_motors()
     state = IDLE
-    tuning_trial = False
     display.show(Image.NO)
     print("EMERGENCY_STOP")
+
+
+def finish_manual_calibration():
+    global state
+    left, right = read_encoders()
+    measured_ticks = (abs(left) + abs(right)) / 2
+    if measured_ticks < 100:
+        display.show(Image.NO)
+        print("CALIBRATION_REJECTED left={} right={}".format(left, right))
+        return
+
+    config["calibration_samples"] += 1
+    config["calibration_ticks_total"] += measured_ticks
+    config["ticks_per_meter"] = (
+        config["calibration_ticks_total"] / config["calibration_samples"]
+    )
+    config["calibrated"] = True
+    save_config()
+    print(
+        "CALIBRATION_SAVED sample={} measured={} average={} theoretical={} "
+        "left={} right={}".format(
+            config["calibration_samples"], measured_ticks,
+            config["ticks_per_meter"], THEORETICAL_TICKS_PER_METER, left, right
+        )
+    )
+    enter_idle()
 
 
 def report_status():
     left, right = read_encoders()
     average = (left + right) / 2
-    distance = average / config["ticks_per_meter"]
+    distance_m = average / config["ticks_per_meter"]
+    heading_rad = (
+        (right - left) / config["ticks_per_meter"] / WHEEL_BASE_M
+    )
     print(
         "STATUS state={} left={} right={} average={} distance_m={} "
-        "target_ticks={} kp={} ki={} kd={} kh={} dh={}".format(
-            state, left, right, average, distance, target_ticks,
-            config["kp_position"], config["ki_position"],
-            config["kd_position"], config["kp_heading"],
-            config["kd_heading"],
+        "heading_rad={} target_ticks={} error={}".format(
+            state, left, right, average, distance_m, heading_rad,
+            target_ticks, target_ticks - average,
         )
     )
 
 
 def control_step():
-    global state, settle_started, position_integral
-    global previous_position_error, previous_heading_error, last_control_time
+    global position_integral, previous_position_error, previous_heading_error
+    global last_control_time
 
     now = running_time()
     elapsed_ms = now - last_control_time
@@ -249,222 +246,66 @@ def control_step():
     position_error = target_ticks - average
     heading_error = left - right
 
-    if position_error <= POSITION_TOLERANCE_TICKS:
+    if abs(position_error) <= POSITION_TOLERANCE_TICKS:
         stop_motors()
-        state = SETTLING
-        settle_started = running_time()
-        display.show(Image.DIAMOND)
+        position_integral = 0.0
+        previous_position_error = position_error
+        previous_heading_error = heading_error
+        display.show(Image.TARGET)
         return
 
     position_integral = clamp(
-        position_integral + position_error * dt, -3000, 3000
+        position_integral + position_error * dt,
+        -INTEGRAL_LIMIT,
+        INTEGRAL_LIMIT,
     )
     position_derivative = (position_error - previous_position_error) / dt
     heading_derivative = (heading_error - previous_heading_error) / dt
 
-    common_speed = (
+    common_command = (
         config["kp_position"] * position_error
         + config["ki_position"] * position_integral
         + config["kd_position"] * position_derivative
     )
     speed_limit = (
         APPROACH_SPEED
-        if position_error < APPROACH_ZONE_TICKS
+        if abs(position_error) < APPROACH_ZONE_TICKS
         else MAX_SPEED
     )
-    common_speed = clamp(common_speed, MIN_SPEED, speed_limit)
+    common_command = clamp(common_command, -speed_limit, speed_limit)
 
-    correction = (
+    if abs(common_command) < MIN_MOVING_SPEED:
+        common_command = sign(common_command) * MIN_MOVING_SPEED
+
+    heading_correction = (
         config["kp_heading"] * heading_error
         + config["kd_heading"] * heading_derivative
     )
-    set_motors(common_speed - correction, common_speed + correction)
 
+    # Heading correction changes sign when driving backwards.
+    correction_sign = sign(common_command)
+    left_command = common_command - correction_sign * heading_correction
+    right_command = common_command + correction_sign * heading_correction
+    set_motors(left_command, right_command)
+
+    display.show(Image.ARROW_N if common_command > 0 else Image.ARROW_S)
     previous_position_error = position_error
     previous_heading_error = heading_error
-
-
-def finish_manual_calibration():
-    global state
-    left, right = read_encoders()
-    measured_ticks = (abs(left) + abs(right)) / 2
-    if measured_ticks < 100:
-        display.show(Image.NO)
-        print("CALIBRATION_REJECTED ticks={}".format(measured_ticks))
-        return
-
-    config["ticks_per_meter"] = measured_ticks
-    config["calibrated"] = True
-    config["distance_cm"] = 100
-    reset_tuner()
-    save_config()
-    append_history(
-        "MANUAL ticks_per_meter={} left={} right={}".format(
-            measured_ticks, left, right
-        )
-    )
-    state = PID_TUNE_WAIT
-    display.show("P")
-    print("CALIBRATION_SAVED ticks_per_meter={}".format(measured_ticks))
-    print("PID_TUNE_READY place at start, A=trial B=finish")
-
-
-def restore_best_pid():
-    config["kp_position"] = config["best_kp_position"]
-    config["ki_position"] = config["best_ki_position"]
-    config["kd_position"] = config["best_kd_position"]
-    config["kp_heading"] = config["best_kp_heading"]
-    config["kd_heading"] = config["best_kd_heading"]
-
-
-def save_best_pid(score):
-    config["best_score"] = score
-    config["best_kp_position"] = config["kp_position"]
-    config["best_ki_position"] = config["ki_position"]
-    config["best_kd_position"] = config["kd_position"]
-    config["best_kp_heading"] = config["kp_heading"]
-    config["best_kd_heading"] = config["kd_heading"]
-
-
-def reset_tuner():
-    config["pid_trials"] = 0
-    config["best_score"] = 999999.0
-    save_best_pid(config["best_score"])
-    config["tune_axis"] = 0
-    config["tune_direction"] = 1
-    config["step_kp_position"] = 0.04
-    config["step_ki_position"] = 0.0005
-    config["step_kd_position"] = 0.08
-    config["step_kp_heading"] = 0.08
-    config["step_kd_heading"] = 0.05
-
-
-def tune_parameter(axis, delta):
-    if axis == 0:
-        config["kp_position"] = clamp(config["kp_position"] + delta, 0.05, 1.5)
-    elif axis == 1:
-        config["ki_position"] = clamp(config["ki_position"] + delta, 0.0, 0.01)
-    elif axis == 2:
-        config["kd_position"] = clamp(config["kd_position"] + delta, 0.0, 3.0)
-    elif axis == 3:
-        config["kp_heading"] = clamp(config["kp_heading"] + delta, 0.0, 2.5)
-    else:
-        config["kd_heading"] = clamp(config["kd_heading"] + delta, 0.0, 2.0)
-
-
-def propose_next_pid(improved):
-    axis = config["tune_axis"]
-    direction = config["tune_direction"]
-    step_keys = (
-        "step_kp_position",
-        "step_ki_position",
-        "step_kd_position",
-        "step_kp_heading",
-        "step_kd_heading",
-    )
-
-    restore_best_pid()
-    if improved:
-        tune_parameter(axis, config[step_keys[axis]] * direction)
-        return
-
-    if direction == 1:
-        config["tune_direction"] = -1
-        tune_parameter(axis, -config[step_keys[axis]])
-        return
-
-    config[step_keys[axis]] *= 0.65
-    config["tune_axis"] = (axis + 1) % 5
-    config["tune_direction"] = 1
-    next_axis = config["tune_axis"]
-    tune_parameter(next_axis, config[step_keys[next_axis]])
-
-
-def tune_pid():
-    global state
-    left, right = read_encoders()
-    average = (left + right) / 2
-    overshoot = average - target_ticks
-    heading_error = left - right
-    duration_ms = running_time() - run_started
-
-    # Overshoot is penalized more strongly than stopping short. Heading error
-    # and a small duration cost prevent a slow but inaccurate optimum.
-    score = (
-        abs(overshoot) * 10
-        + max(0, overshoot) * 20
-        + abs(heading_error) * 2
-        + duration_ms / 1000
-    )
-    improved = score < config["best_score"]
-    tested_pid = (
-        config["kp_position"], config["ki_position"], config["kd_position"],
-        config["kp_heading"], config["kd_heading"],
-    )
-    if improved:
-        save_best_pid(score)
-
-    config["pid_trials"] += 1
-    propose_next_pid(improved)
-    save_config()
-    append_history(
-        "PID trial={} score={} improved={} target={} final={} overshoot={} "
-        "heading_error={} duration_ms={} tested_pid={} next_pid={}".format(
-            config["pid_trials"], score, improved,
-            target_ticks, average, overshoot,
-            heading_error, duration_ms, tested_pid,
-            (config["kp_position"], config["ki_position"],
-             config["kd_position"], config["kp_heading"],
-             config["kd_heading"]),
-        )
-    )
-    state = PID_TUNE_WAIT
-    display.show("P")
-    print(
-        "PID_RESULT trial={} score={} best={} overshoot={} heading={} "
-        "next_p={} next_i={} next_d={}".format(
-            config["pid_trials"], score, config["best_score"],
-            overshoot, heading_error,
-            config["kp_position"], config["ki_position"],
-            config["kd_position"],
-        )
-    )
-    print("PID_TUNE_READY place at start, A=trial B=finish")
-
-
-def finish_settling():
-    global state
-    if tuning_trial:
-        tune_pid()
-    else:
-        state = HOLDING
-        display.show(Image.TARGET)
-        report_status()
-        print("TARGET_REACHED")
 
 
 def handle_a():
     global state
     if state == IDLE:
         if config["calibrated"]:
-            start_run(False)
+            start_holding()
         else:
-            state = CALIBRATION_MENU
-            display.show("C")
-            print("CALIBRATION_REQUIRED A=ticks_per_meter")
+            display.show(Image.NO)
+            print("CALIBRATION_REQUIRED use A+B")
     elif state == DISTANCE_SELECT:
         config["distance_cm"] += 10
         if config["distance_cm"] > 500:
             config["distance_cm"] = 10
         show_distance()
-    elif state == CALIBRATION_MENU:
-        stop_motors()
-        reset_encoders()
-        state = MANUAL_CALIBRATION
-        display.show("C")
-        print("MANUAL_CALIBRATION_STARTED move exactly 1m, B=save")
-    elif state == PID_TUNE_WAIT:
-        start_run(True)
 
 
 def handle_b():
@@ -475,38 +316,25 @@ def handle_b():
     elif state == DISTANCE_SELECT:
         save_config()
         enter_idle()
-    elif state == CALIBRATION_MENU:
-        if not config["calibrated"]:
-            display.show(Image.NO)
-            print("PID_TUNE_BLOCKED calibrate ticks_per_meter first")
-            return
-        state = PID_TUNE_WAIT
-        display.show("P")
-        print("PID_TUNE_READY place at start, A=trial B=finish")
     elif state == MANUAL_CALIBRATION:
         finish_manual_calibration()
-    elif state == PID_TUNE_WAIT:
-        restore_best_pid()
-        save_config()
-        enter_idle()
-    elif state in (RUNNING, SETTLING, HOLDING):
+    elif state == HOLDING_POSITION:
         enter_idle()
 
 
 def handle_combo():
     global state
-    if state in (RUNNING, SETTLING, HOLDING):
+    if state == HOLDING_POSITION:
         emergency_stop()
     else:
         stop_motors()
-        state = CALIBRATION_MENU
+        reset_encoders()
+        state = MANUAL_CALIBRATION
         display.show("C")
-        print("CALIBRATION_MENU A=ticks_per_meter B=PID")
+        print("CALIBRATION_STARTED move exactly 1m then press B")
 
 
 load_config()
-if config["best_score"] < 999999.0:
-    restore_best_pid()
 
 try:
     while True:
@@ -516,13 +344,14 @@ try:
                 sleep(500)
                 continue
             write_register(0x0A, (0,))
-            stop_motors()
             connected = True
             enter_idle()
-            print("READY ticks_per_meter={} distance_cm={} pid_trials={}".format(
-                config["ticks_per_meter"], config["distance_cm"],
-                config["pid_trials"],
-            ))
+            print(
+                "READY ticks_per_meter={} theoretical={} distance_cm={}".format(
+                    config["ticks_per_meter"], THEORETICAL_TICKS_PER_METER,
+                    config["distance_cm"],
+                )
+            )
 
         try:
             both_pressed = button_a.is_pressed() and button_b.is_pressed()
@@ -543,18 +372,8 @@ try:
                 if button_b.was_pressed():
                     handle_b()
 
-            if state == RUNNING:
+            if state == HOLDING_POSITION:
                 control_step()
-            elif state == SETTLING:
-                if running_time() - settle_started >= SETTLE_TIME_MS:
-                    finish_settling()
-            elif state == HOLDING:
-                left, right = read_encoders()
-                if target_ticks - ((left + right) / 2) > HOLD_RESTART_TICKS:
-                    reset_pid()
-                    state = RUNNING
-                    display.show(Image.ARROW_N)
-                    print("RETURN_TO_TARGET")
 
             if running_time() - last_report_time >= 1000:
                 last_report_time = running_time()

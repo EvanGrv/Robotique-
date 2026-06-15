@@ -1,127 +1,96 @@
-# Positionnement autonome avec calibration PID
+# Position absolue par odometrie des roues
 
-Ce projet fonctionne sans ordinateur apres son installation. Les boutons de la
-micro:bit commandent la calibration, les essais PID, la distance et le depart.
+Le robot utilise uniquement les encodeurs des roues. La conversion theorique
+est :
 
-## Installation initiale
+```text
+distance_par_tick = 2 * pi * rayon / ticks_par_tour
+ticks_par_metre = ticks_par_tour / (2 * pi * rayon)
+```
 
-Depuis la racine du depot :
+Avec `rayon = 0,0215 m` et `80 ticks/tour`, la valeur theorique est environ
+`592,20 ticks/m`. Comme les ticks reels exposes par la Maqueen peuvent differer,
+le firmware permet de mesurer puis sauvegarder la valeur reelle.
+
+## Installation
 
 ```sh
-make install PROJECT=position_1m
+make flash PROJECT=position_1m
 ```
 
-Debranchez ensuite le cable USB. Le robot fonctionne avec les batteries de la
-Maqueen.
+Le robot fonctionne ensuite sans ordinateur.
 
-## Commandes des boutons
+## Calibration reelle des ticks par metre
 
-### Au repos
+1. Placez le robot au debut d'une distance mesuree de exactement `1 m`.
+2. Appuyez sur `A+B`. Les encodeurs sont remis a zero et `C` s'affiche.
+3. Faites rouler manuellement le robot jusqu'au repere de 1 m, sans le soulever.
+4. Appuyez sur `B`.
 
-- `A` : lancer le parcours avec la distance memorisee.
-- `B` : choisir une distance entre 10 cm et 500 cm, par pas de 10 cm.
-- `A+B` : ouvrir le menu calibration.
+La moyenne absolue des deux encodeurs devient un nouvel echantillon. Le
+firmware sauvegarde la moyenne cumulative de toutes les mesures comme
+`ticks_per_meter`.
 
-### Choix de distance
+Repetez cette procedure au moins cinq fois pour reduire l'erreur de placement
+manuel. La valeur sauvegardee converge vers la moyenne des mesures.
 
-- `A` : ajouter 10 cm.
-- `B` : sauvegarder et revenir au repos.
+## Maintenir une position cible
 
-### Menu calibration
+Au repos :
 
-- `A` : commencer la mesure manuelle des ticks sur exactement 1 metre.
-- `B` : ouvrir le mode de calibration PID.
+- `B` ouvre le choix de distance.
+- Dans le choix de distance, `A` ajoute `10 cm` et `B` sauvegarde.
+- `A` definit la position actuelle comme origine `0`, calcule la cible absolue
+  et active son maintien.
 
-### Mesure manuelle des ticks
-
-1. Placez le robot au debut d'une distance mesuree de exactement 1 metre.
-2. Au repos, appuyez sur `A+B`, puis sur `A`.
-3. Faites rouler manuellement le robot jusqu'au repere de 1 metre, sans le
-   soulever.
-4. Appuyez sur `B` a l'arrivee.
-
-Le robot sauvegarde la moyenne absolue des deux encodeurs comme
-`ticks_per_meter`, puis ouvre automatiquement le mode de calibration PID.
-
-### Calibration PID par essais
-
-1. Replacez manuellement le robot au depart.
-2. Appuyez sur `A` pour lancer un essai motorise.
-3. Le robot parcourt la distance memorisee, s'arrete, calcule un score, conserve
-   le meilleur PID connu puis prepare le candidat suivant.
-4. Replacez-le au depart et appuyez de nouveau sur `A`.
-5. Realisez idealement entre 20 et 30 essais afin de tester les gains dans les
-   deux directions et de reduire progressivement les pas.
-6. Appuyez sur `B` pour terminer : le meilleur PID mesure est restaure et
-   sauvegarde.
-
-Pendant tout mouvement, `A+B` provoque un arret d'urgence.
-
-## Parametres memorises
-
-Le fichier `position_config.txt` est sauvegarde dans la micro:bit :
+Exemple pour une cible de `1 m` :
 
 ```text
-ticks_per_meter
-calibrated
-distance_cm
-kp_position
-ki_position
-kd_position
-kp_heading
-kd_heading
-pid_trials
+origine = 0 tick
+cible = ticks_par_metre
+erreur = cible - position_actuelle
 ```
 
-Pour recuperer ces valeurs apres avoir reconnecte le cable USB :
+Le PID commande les moteurs dans les deux sens :
 
-```sh
-make read-config PROJECT=position_1m
-```
+- erreur positive : avancer ;
+- erreur negative : reculer ;
+- erreur proche de zero : arreter.
 
-Le fichier est alors copie dans `position_1m/position_config.txt`.
+Si le robot est recule en faisant tourner ses roues, ses ticks diminuent et le
+PID le fait avancer jusqu'a la cible. S'il est pousse au-dela, il recule.
 
-## Entrainement PID utilise
+`B` ou `A+B` arrete le maintien.
 
-Il n'existe pas de formule permettant de calculer exactement les gains PID a
-partir d'un seul parcours manuel. Le parcours manuel calibre uniquement les
-ticks par metre.
+## Point de reference
 
-Chaque essai motorise mesure ensuite :
+Les encodeurs mesurent une position relative a l'origine choisie avec `A`.
+Pour partir depuis une position deja situee a `10 cm` du debut physique, il faut
+que cette position soit connue dans les ticks. Si `A` est presse a cet endroit,
+il devient volontairement la nouvelle origine `0`.
+
+Le robot ne peut pas connaitre un deplacement effectue en le soulevant, car les
+roues et les encodeurs ne tournent pas.
+
+## PID
+
+Le nombre de ticks par metre vient de la geometrie/calibration, pas du PID.
 
 ```text
-depassement = position_finale - position_cible
-erreur_direction = encodeur_gauche - encodeur_droit
-score = abs(depassement) * 10
-      + depassement_positif * 20
-      + abs(erreur_direction) * 2
-      + duree_en_secondes
+commande = P * erreur
+         + I * integrale(erreur)
+         + D * derivee(erreur)
 ```
 
-Le depassement est davantage penalise qu'un arret legerement trop court. Le
-robot teste successivement :
+Les gains sauvegardes actuellement sont :
 
 ```text
-P position
-I position
-D position
-P direction
-D direction
+P position = 0.3686
+I position = 0.0
+D position = 0.58
+P direction = 0.75
+D direction = 0.35
 ```
 
-Pour chaque gain, il essaie une augmentation puis une diminution. Si le score
-s'ameliore, le nouveau PID devient le meilleur. Sinon, le meilleur PID est
-restaure, le pas de recherche diminue, puis le gain suivant est teste.
-
-`I_position` commence a zero, mais il est maintenant reellement teste avec de
-tres petits pas. Il restera nul si son ajout degrade le score.
-
-## Limites physiques
-
-Les encodeurs mesurent la rotation des roues, pas la position absolue sur le
-sol. Un glissement, un deplacement du robot en le soulevant ou une roue bloquee
-fausse la position.
-
-Pour une garantie physique stricte du point d'arrivee, il faudra ajouter un
-repere externe, par exemple une ligne au sol detectee par les capteurs de la
-Maqueen.
+Ils peuvent etre ajustes apres observation, mais aucun entrainement n'est
+necessaire pour calculer les distances.
