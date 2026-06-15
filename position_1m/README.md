@@ -92,25 +92,32 @@ manuellement pendant que les moteurs sont arretes (`direction=0`), le sens est
 inconnu : le firmware declenche un arret de securite au lieu d'inventer une
 position.
 
-## PID
+## Controleur proportionnel de position
 
-Le nombre de ticks par metre vient de la geometrie/calibration, pas du PID.
+Le nombre de ticks par metre vient de la geometrie/calibration. La commande
+moteur suit directement le modele discret base sur les ticks :
 
 ```text
-commande = P * erreur
-         + I * integrale(erreur)
-         + D * derivee(erreur)
+erreur_ticks = cible_ticks - position_signee_ticks
+commande = P * erreur_ticks
 ```
 
-Les gains sauvegardes actuellement sont :
+`sleep(10)` ou la periode de boucle determine uniquement quand la position est
+relue. Le calcul de commande ne contient ni temps, ni integrale, ni derivee.
+
+La correction de direction est egalement proportionnelle :
+
+```text
+erreur_direction = position_gauche - position_droite
+correction_direction = P_direction * erreur_direction
+```
+
+Les valeurs actuellement utilisees sont :
 
 ```text
 P position = 0.3686
-I position = 0.0
-D position = 0.58
 P direction = 0.75
-D direction = 0.35
 ```
 
-Ils peuvent etre ajustes apres observation, mais aucun entrainement n'est
-necessaire pour calculer les distances.
+Les anciennes valeurs `I` et `D` restent dans la configuration historique,
+mais ne sont plus utilisees par ce controleur.

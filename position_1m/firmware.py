@@ -11,9 +11,8 @@ THEORETICAL_TICKS_PER_METER = (
     ENCODER_COUNTS_PER_REVOLUTION / (2 * 3.14159265 * WHEEL_RADIUS_M)
 )
 
-CONTROL_PERIOD_MS = 50
+CONTROL_PERIOD_MS = 10
 POSITION_TOLERANCE_TICKS = 2
-INTEGRAL_LIMIT = 1500
 MAX_RUN_TIME_MS = 20000
 MAX_OVERSHOOT_TICKS = 30
 MAX_DELTA_TICKS = 100
@@ -56,9 +55,6 @@ state = IDLE
 connected = False
 combo_latched = False
 target_ticks = 0
-position_integral = 0.0
-previous_position_error = 0
-previous_heading_error = 0
 last_control_time = running_time()
 last_report_time = running_time()
 run_started = 0
@@ -198,12 +194,8 @@ def stop_motors():
     write_register(0x00, (0, 0, 0, 0))
 
 
-def reset_pid(initial_error=0):
-    global position_integral, previous_position_error, previous_heading_error
+def reset_controller():
     global last_control_time
-    position_integral = 0.0
-    previous_position_error = initial_error
-    previous_heading_error = 0
     last_control_time = running_time()
 
 
@@ -227,7 +219,7 @@ def start_run():
     target_ticks = int(
         config["ticks_per_meter"] * config["distance_cm"] / 100
     )
-    reset_pid(target_ticks)
+    reset_controller()
     run_started = running_time()
     state = RUNNING_TO_TARGET
     display.show(Image.ARROW_N)
@@ -288,8 +280,7 @@ def report_status():
 
 
 def control_step():
-    global state, position_integral, previous_position_error, previous_heading_error
-    global last_control_time
+    global state, last_control_time
 
     now = running_time()
     elapsed_ms = now - last_control_time
@@ -297,7 +288,6 @@ def control_step():
         return
 
     last_control_time = now
-    dt = elapsed_ms / 1000
     left, right = update_position()
     average = (left + right) / 2
     position_error = target_ticks - average
@@ -318,7 +308,6 @@ def control_step():
     if abs(position_error) <= POSITION_TOLERANCE_TICKS:
         stop_motors()
         state = IDLE
-        position_integral = 0.0
         display.show(Image.TARGET)
         print("TARGET_REACHED average={} target={} error={}".format(
             average, target_ticks, position_error
@@ -330,19 +319,9 @@ def control_step():
         print("SAFETY_TIMEOUT")
         return
 
-    position_integral = clamp(
-        position_integral + position_error * dt,
-        -INTEGRAL_LIMIT,
-        INTEGRAL_LIMIT,
-    )
-    position_derivative = (position_error - previous_position_error) / dt
-    heading_derivative = (heading_error - previous_heading_error) / dt
-
-    common_command = (
-        config["kp_position"] * position_error
-        + config["ki_position"] * position_integral
-        + config["kd_position"] * position_derivative
-    )
+    # Position controller from the provided model: command = error_ticks * P.
+    # No time integral or derivative is used here.
+    common_command = config["kp_position"] * position_error
     speed_limit = (
         APPROACH_SPEED
         if abs(position_error) < APPROACH_ZONE_TICKS
@@ -353,10 +332,7 @@ def control_step():
     if abs(common_command) < MIN_MOVING_SPEED:
         common_command = sign(common_command) * MIN_MOVING_SPEED
 
-    heading_correction = (
-        config["kp_heading"] * heading_error
-        + config["kd_heading"] * heading_derivative
-    )
+    heading_correction = config["kp_heading"] * heading_error
 
     correction_sign = sign(common_command)
     left_command = common_command - correction_sign * heading_correction
@@ -364,8 +340,6 @@ def control_step():
     set_signed_motors(left_command, right_command)
 
     display.show(Image.ARROW_N if common_command > 0 else Image.ARROW_S)
-    previous_position_error = position_error
-    previous_heading_error = heading_error
 
 
 def handle_a():
