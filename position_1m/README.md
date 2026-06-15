@@ -48,7 +48,7 @@ Le PID initialise l'integrale et l'erreur precedente a zero avant chaque
 trajet. Les gains actuels sont :
 
 ```python
-KP, KI, KD = 200, 0, 0
+KP, KI, KD = 350, 0, 0
 ```
 
 Un seul trajet manuel calibre les ticks par metre. Il ne permet pas de calculer

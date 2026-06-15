@@ -2,7 +2,7 @@ from microbit import *
 
 
 ADDR = 0x10
-KP, KI, KD = 200, 0, 0
+KP, KI, KD = 350, 0, 0
 
 ticks_per_meter = 0
 position_ticks = 0
