@@ -24,7 +24,8 @@ Aucune valeur theorique et aucune ancienne calibration ne sont utilisees.
 2. Faire rouler manuellement le robot sur exactement `1 m`.
 3. Appuyer sur `B`.
 
-Le nombre moyen de ticks mesure devient `ticks_per_meter`.
+Le nombre moyen de ticks mesure devient `ticks_per_meter`. La position courante
+devient immediatement `1 m` et le PID commence a la maintenir.
 
 Pendant la calibration et ensuite toutes les `500 ms`, le port serie affiche :
 
@@ -37,16 +38,20 @@ le robot vers l'avant et `2` en le poussant vers l'arriere.
 
 ## Utilisation
 
-- `A` : aller a la position `1 m`.
-- `B` : arreter et remettre la position a zero.
+- `A` : reactiver le maintien de la position `1 m`.
+- `B` : mettre le maintien en pause sans modifier la position.
 - `A+B` : refaire la mesure manuelle de `1 m`.
+
+Le zero est cree uniquement au debut de `A+B`. Il n'est jamais recrée lorsque
+le robot atteint la cible, sinon le robot croirait a tort etre revenu a `0 m`
+et repartirait vers l'avant.
 
 Etats affiches :
 
-- `R` : pret ;
+- `R` : maintien en pause ;
 - `C` : calibration obligatoire ou en cours ;
-- fleche haute/basse : PID en mouvement ;
-- cible : position atteinte.
+- fleche haute/basse : correction PID ;
+- cible : position `1 m` maintenue.
 
 Le PID initialise l'integrale et l'erreur precedente a zero avant chaque
 trajet. Les gains actuels sont :

@@ -5,8 +5,8 @@ ADDRESS = 0x10
 TARGET_M = 1.0
 KP, KI, KD = 200, 0, 0
 
-IDLE, CALIBRATION, MOVING = 0, 1, 2
-state = IDLE
+WAITING, CALIBRATION, HOLDING = 0, 1, 2
+state = WAITING
 combo_pressed = False
 ticks_per_meter = 0
 ticks = 0
@@ -69,7 +69,7 @@ def update_position():
 
 
 def move_to(target):
-    global state, integral, previous_error
+    global integral, previous_error
     error = target - ticks / ticks_per_meter
     integral += error * 0.01
     derivative = (error - previous_error) / 0.01
@@ -77,7 +77,6 @@ def move_to(target):
 
     if abs(error) < 0.005:
         motor(0)
-        state = IDLE
         display.show(Image.TARGET)
     else:
         command = KP * error + KI * integral + KD * derivative
@@ -95,29 +94,32 @@ def start_calibration():
 
 
 def finish_calibration():
-    global state, ticks_per_meter
+    global state, ticks_per_meter, ticks, integral, previous_error
     left, right = coders()
     measured_ticks = (left + right) / 2
     if measured_ticks > 100:
         ticks_per_meter = measured_ticks
-        display.show(Image.YES)
+        ticks = measured_ticks
+        integral = previous_error = 0
+        state = HOLDING
+        display.show(Image.TARGET)
         print("CALIBRATED ticks_per_meter={}".format(ticks_per_meter))
+        print("STATE HOLDING position=1.0")
     else:
+        state = WAITING
         display.show(Image.NO)
         print("CALIBRATION_REJECTED ticks={}".format(measured_ticks))
-    reset_position()
-    state = IDLE
 
 
-def start_move():
+def start_holding():
     global state, integral, previous_error
     if ticks_per_meter == 0:
         display.show(Image.NO)
         print("CALIBRATION_REQUIRED")
         return
     integral = previous_error = 0
-    state = MOVING
-    print("STATE MOVING target_m={} ticks_per_meter={}".format(
+    state = HOLDING
+    print("STATE HOLDING target_m={} ticks_per_meter={}".format(
         TARGET_M, ticks_per_meter
     ))
 
@@ -145,15 +147,17 @@ while True:
             if state == CALIBRATION:
                 finish_calibration()
             else:
-                reset_position()
-                state = IDLE
+                motor(0)
+                state = WAITING
                 display.show("R" if ticks_per_meter else "C")
-                print("STATE RESET")
-        elif button_a.was_pressed() and state == IDLE:
-            start_move()
+                print("STATE PAUSED position={}".format(
+                    ticks / ticks_per_meter if ticks_per_meter else 0
+                ))
+        elif button_a.was_pressed() and state == WAITING:
+            start_holding()
 
     left, right, left_direction, right_direction = update_position()
-    if state == MOVING:
+    if state == HOLDING:
         move_to(TARGET_M)
 
     if running_time() - last_report > 500:
