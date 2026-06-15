@@ -9,7 +9,11 @@ Le firmware contient uniquement :
 
 ## Premier test
 
-1. Appuyer sur `A+B` pour remettre les compteurs a zero.
+Le robot utilise immediatement la valeur theorique d'environ `592.2 ticks/m`.
+
+Pour mesurer une valeur reelle :
+
+1. Appuyer sur `A+B` pour lancer la calibration et remettre les compteurs a zero.
 2. Faire rouler manuellement le robot sur exactement `1 m`.
 3. Appuyer sur `B`.
 
@@ -29,6 +33,13 @@ le robot vers l'avant et `2` en le poussant vers l'arriere.
 - `A` : aller a la position `1 m`.
 - `B` : arreter et remettre la position a zero.
 - `A+B` : refaire la mesure manuelle de `1 m`.
+
+Etats affiches :
+
+- `R` : pret ;
+- `C` : calibration ;
+- fleche haute/basse : PID en mouvement ;
+- cible : position atteinte.
 
 Le PID initialise l'integrale et l'erreur precedente a zero avant chaque
 trajet. Les gains actuels sont :
