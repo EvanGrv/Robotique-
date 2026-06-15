@@ -16,6 +16,7 @@ POSITION_TOLERANCE_TICKS = 2
 INTEGRAL_LIMIT = 1500
 MAX_RUN_TIME_MS = 20000
 MAX_OVERSHOOT_TICKS = 30
+MAX_DELTA_TICKS = 100
 MAX_SPEED = 80
 APPROACH_SPEED = 38
 APPROACH_ZONE_TICKS = 80
@@ -61,6 +62,11 @@ previous_heading_error = 0
 last_control_time = running_time()
 last_report_time = running_time()
 run_started = 0
+left_raw_previous = 0
+right_raw_previous = 0
+left_position_ticks = 0
+right_position_ticks = 0
+manual_motion_unknown = False
 
 
 def clamp(value, minimum, maximum):
@@ -73,11 +79,6 @@ def sign(value):
     if value < 0:
         return -1
     return 0
-
-
-def signed_16(msb, lsb):
-    value = (msb << 8) | lsb
-    return value - 65536 if value >= 32768 else value
 
 
 def load_config():
@@ -117,23 +118,79 @@ def write_register(register, values=()):
     i2c.write(MAQUEEN_ADDRESS, bytes([register] + list(values)))
 
 
-def read_encoders():
+def read_raw_encoders():
     write_register(0x04)
     data = i2c.read(MAQUEEN_ADDRESS, 4)
-    return signed_16(data[0], data[1]), signed_16(data[2], data[3])
+    return (data[0] << 8) | data[1], (data[2] << 8) | data[3]
+
+
+def read_motor_directions():
+    write_register(0x00)
+    data = i2c.read(MAQUEEN_ADDRESS, 4)
+    return data[0], data[2]
+
+
+def direction_sign(direction):
+    if direction == 1:
+        return 1
+    if direction == 2:
+        return -1
+    return 0
+
+
+def raw_delta(current, previous):
+    delta = (current - previous) & 0xFFFF
+    return delta if delta <= MAX_DELTA_TICKS else 0
+
+
+def reset_position():
+    global left_raw_previous, right_raw_previous
+    global left_position_ticks, right_position_ticks, manual_motion_unknown
+    reset_encoders()
+    left_raw_previous, right_raw_previous = read_raw_encoders()
+    left_position_ticks = 0
+    right_position_ticks = 0
+    manual_motion_unknown = False
+
+
+def update_position():
+    global left_raw_previous, right_raw_previous
+    global left_position_ticks, right_position_ticks, manual_motion_unknown
+
+    left_raw, right_raw = read_raw_encoders()
+    left_direction, right_direction = read_motor_directions()
+    left_delta = raw_delta(left_raw, left_raw_previous)
+    right_delta = raw_delta(right_raw, right_raw_previous)
+
+    left_sign = direction_sign(left_direction)
+    right_sign = direction_sign(right_direction)
+    if (left_delta and not left_sign) or (right_delta and not right_sign):
+        manual_motion_unknown = True
+
+    left_position_ticks += left_delta * left_sign
+    right_position_ticks += right_delta * right_sign
+    left_raw_previous = left_raw
+    right_raw_previous = right_raw
+    return left_position_ticks, right_position_ticks
 
 
 def reset_encoders():
     write_register(0x04, (0, 0, 0))
 
 
-def set_motors(left_speed, right_speed):
-    left_speed = int(clamp(left_speed, 0, 240))
-    right_speed = int(clamp(right_speed, 0, 240))
+def motor_values(command):
+    speed = int(clamp(abs(command), 0, 240))
+    if not speed:
+        return 0, 0
+    return (1 if command > 0 else 2), speed
+
+
+def set_signed_motors(left_command, right_command):
+    left_direction, left_speed = motor_values(left_command)
+    right_direction, right_speed = motor_values(right_command)
     write_register(
         0x00,
-        (1 if left_speed else 0, left_speed,
-         1 if right_speed else 0, right_speed),
+        (left_direction, left_speed, right_direction, right_speed),
     )
 
 
@@ -166,7 +223,7 @@ def enter_idle():
 def start_run():
     global state, target_ticks, run_started
     stop_motors()
-    reset_encoders()
+    reset_position()
     target_ticks = int(
         config["ticks_per_meter"] * config["distance_cm"] / 100
     )
@@ -189,7 +246,8 @@ def emergency_stop():
 
 def finish_manual_calibration():
     global state
-    left, right = read_encoders()
+    left_raw, right_raw = read_raw_encoders()
+    left, right = left_raw, right_raw
     measured_ticks = (abs(left) + abs(right)) / 2
     if measured_ticks < 100:
         display.show(Image.NO)
@@ -214,7 +272,7 @@ def finish_manual_calibration():
 
 
 def report_status():
-    left, right = read_encoders()
+    left, right = update_position()
     average = (left + right) / 2
     distance_m = average / config["ticks_per_meter"]
     heading_rad = (
@@ -222,9 +280,9 @@ def report_status():
     )
     print(
         "STATUS state={} left={} right={} average={} distance_m={} "
-        "heading_rad={} target_ticks={} error={}".format(
+        "heading_rad={} target_ticks={} error={} manual_unknown={}".format(
             state, left, right, average, distance_m, heading_rad,
-            target_ticks, target_ticks - average,
+            target_ticks, target_ticks - average, manual_motion_unknown,
         )
     )
 
@@ -240,10 +298,15 @@ def control_step():
 
     last_control_time = now
     dt = elapsed_ms / 1000
-    left, right = read_encoders()
+    left, right = update_position()
     average = (left + right) / 2
     position_error = target_ticks - average
     heading_error = left - right
+
+    if manual_motion_unknown:
+        emergency_stop()
+        print("SAFETY_MANUAL_DIRECTION_UNKNOWN")
+        return
 
     if average > target_ticks + MAX_OVERSHOOT_TICKS:
         emergency_stop()
@@ -252,7 +315,7 @@ def control_step():
         ))
         return
 
-    if position_error <= POSITION_TOLERANCE_TICKS:
+    if abs(position_error) <= POSITION_TOLERANCE_TICKS:
         stop_motors()
         state = IDLE
         position_integral = 0.0
@@ -285,21 +348,22 @@ def control_step():
         if abs(position_error) < APPROACH_ZONE_TICKS
         else MAX_SPEED
     )
-    common_command = clamp(common_command, 0, speed_limit)
+    common_command = clamp(common_command, -speed_limit, speed_limit)
 
     if abs(common_command) < MIN_MOVING_SPEED:
-        common_command = MIN_MOVING_SPEED
+        common_command = sign(common_command) * MIN_MOVING_SPEED
 
     heading_correction = (
         config["kp_heading"] * heading_error
         + config["kd_heading"] * heading_derivative
     )
 
-    left_command = common_command - heading_correction
-    right_command = common_command + heading_correction
-    set_motors(left_command, right_command)
+    correction_sign = sign(common_command)
+    left_command = common_command - correction_sign * heading_correction
+    right_command = common_command + correction_sign * heading_correction
+    set_signed_motors(left_command, right_command)
 
-    display.show(Image.ARROW_N)
+    display.show(Image.ARROW_N if common_command > 0 else Image.ARROW_S)
     previous_position_error = position_error
     previous_heading_error = heading_error
 

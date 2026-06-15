@@ -51,9 +51,28 @@ cible = ticks_par_metre
 erreur = cible - position_actuelle
 ```
 
-Le PID commande uniquement le mouvement vers l'avant. Lorsque la cible est
-atteinte, les moteurs sont arretes et le parcours se termine. Une limite de
-temps et une limite de depassement provoquent aussi un arret de securite.
+Pendant un mouvement commande, le firmware lit a la fois :
+
+```text
+delta_ticks = (compteur_actuel - compteur_precedent) modulo 65536
+position_signee += delta_ticks * signe(direction_moteur)
+```
+
+`direction=1` ajoute les ticks et `direction=2` les soustrait. Le PID peut donc
+corriger un depassement en commandant un recul.
+
+La commande moteur utilise toujours une vitesse positive :
+
+```text
+si commande > 0 : direction = 1, vitesse = commande
+si commande < 0 : direction = 2, vitesse = abs(commande)
+```
+
+Donner directement une vitesse negative a la Maqueen serait incorrect.
+
+Lorsque la cible est atteinte, les moteurs sont arretes et le parcours se
+termine. Une limite de temps et une limite de depassement provoquent aussi un
+arret de securite.
 
 `B` ou `A+B` arrete le parcours.
 
@@ -67,9 +86,11 @@ il devient volontairement la nouvelle origine `0`.
 Le robot ne peut pas connaitre un deplacement effectue en le soulevant.
 
 Les compteurs exposes par la Maqueen Plus V1 augmentent egalement lors d'un
-recul manuel. Ils ne donnent donc pas le signe de la rotation. Avec ces seuls
-compteurs, le robot ne peut pas distinguer un avancement d'un recul manuel et
-ne peut pas revenir automatiquement a une position apres avoir ete recule.
+recul manuel. Le registre de direction indique la direction commandee au
+moteur, pas le sens physique detecte par l'encodeur. Si les roues tournent
+manuellement pendant que les moteurs sont arretes (`direction=0`), le sens est
+inconnu : le firmware declenche un arret de securite au lieu d'inventer une
+position.
 
 ## PID
 
