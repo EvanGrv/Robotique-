@@ -2,10 +2,9 @@ from microbit import *
 
 
 ADDR = 0x10
-KP, KI, KD = 2.5, 0, 0
-MIN_SPEED = 45
+KP, KI, KD = 2, 0, 0
 MAX_SPEED = 200
-TOLERANCE_TICKS = 4
+TOLERANCE_TICKS = 6
 
 target_ticks = 0
 position_ticks = 0
@@ -83,9 +82,7 @@ def pid():
     if abs(error_ticks) <= TOLERANCE_TICKS:
         motor(0)
     else:
-        correction = KP * error_ticks + KI * integral + KD * derivative
-        command = (MIN_SPEED if correction > 0 else -MIN_SPEED) + correction
-        motor(command)
+        motor(KP * error_ticks + KI * integral + KD * derivative)
 
 
 while ADDR not in i2c.scan():

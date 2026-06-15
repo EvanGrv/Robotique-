@@ -50,17 +50,16 @@ vitesse envoye a la Maqueen :
 
 ```python
 erreur_ticks = ticks_cible - ticks_actuels
-commande = minimum_directionnel + KP * erreur_ticks
+commande = KP * erreur_ticks
 
-KP, KI, KD = 2.5, 0, 0
-MIN_SPEED = 45
+KP, KI, KD = 2, 0, 0
 MAX_SPEED = 200
-TOLERANCE_TICKS = 4
+TOLERANCE_TICKS = 6
 ```
 
-La commande reste nulle dans une zone de `4 ticks`. Hors de cette zone, elle
-commence avec une valeur minimale de `45`, puis augmente de `2.5` pour chaque
-tick d'erreur jusqu'a la limite configuree de `200`.
+La commande reste nulle dans une zone de `6 ticks`. Hors de cette zone, elle
+est strictement proportionnelle : `2` octets de vitesse par tick d'erreur,
+jusqu'a la limite configuree de `200`.
 
 Chaque lecture I2C suit explicitement :
 
