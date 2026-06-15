@@ -10,19 +10,17 @@ THEORETICAL_TICKS_PER_METER = (
     ENCODER_COUNTS_PER_REVOLUTION / (2 * 3.14159265 * WHEEL_RADIUS_M)
 )
 
-# Controller based directly on distance:
-# motor_command = distance_error_m * POSITION_KP
-POSITION_KP = 200.0
-HEADING_KP = 400.0
-
 LOOP_DELAY_MS = 10
 POSITION_TOLERANCE_M = 0.005
+STABLE_TIME_MS = 500
 APPROACH_ZONE_M = 0.15
 MAX_SPEED = 80
 APPROACH_SPEED = 38
 MIN_SPEED = 20
 MAX_RUN_TIME_MS = 30000
 MAX_RAW_DELTA_TICKS = 100
+INTEGRAL_LIMIT_M_S = 0.25
+DERIVATIVE_FILTER_ALPHA = 0.20
 
 IDLE = 0
 DISTANCE_SELECT = 1
@@ -35,6 +33,10 @@ config = {
     "calibration_samples": 0,
     "calibration_ticks_total": 0.0,
     "distance_cm": 100,
+    "kp_position": 200.0,
+    "ki_position": 5.0,
+    "kd_position": 20.0,
+    "kp_heading": 400.0,
 }
 CONFIG_KEYS = (
     "ticks_per_meter",
@@ -42,12 +44,26 @@ CONFIG_KEYS = (
     "calibration_samples",
     "calibration_ticks_total",
     "distance_cm",
+    "kp_position",
+    "ki_position",
+    "kd_position",
+    "kp_heading",
 )
 
 state = IDLE
 connected = False
 combo_latched = False
 run_started = 0
+stable_started = 0
+last_pid_time = running_time()
+last_report_time = running_time()
+position_integral_m_s = 0.0
+filtered_velocity_m_s = 0.0
+previous_position_m = 0.0
+last_p_term = 0.0
+last_i_term = 0.0
+last_d_term = 0.0
+last_common_command = 0.0
 
 left_raw_previous = 0
 right_raw_previous = 0
@@ -199,17 +215,29 @@ def show_distance():
 
 
 def enter_idle():
-    global state
+    global state, stable_started
     stop_motors()
     state = IDLE
+    stable_started = 0
     display.show(Image.SQUARE_SMALL)
     print("IDLE A=move B=distance AB=calibrate")
 
 
 def start_move():
-    global state, run_started
+    global state, run_started, stable_started, last_pid_time
+    global position_integral_m_s, filtered_velocity_m_s, previous_position_m
+    global last_p_term, last_i_term, last_d_term, last_common_command
     reset_position()
     run_started = running_time()
+    stable_started = 0
+    last_pid_time = run_started
+    position_integral_m_s = 0.0
+    filtered_velocity_m_s = 0.0
+    previous_position_m = 0.0
+    last_p_term = 0.0
+    last_i_term = 0.0
+    last_d_term = 0.0
+    last_common_command = 0.0
     state = MOVING
     display.show(Image.ARROW_N)
     print("MOVE target_m={}".format(config["distance_cm"] / 100))
@@ -224,7 +252,9 @@ def emergency_stop(reason):
 
 
 def update_motors():
-    global state
+    global state, stable_started, last_pid_time
+    global position_integral_m_s, filtered_velocity_m_s, previous_position_m
+    global last_p_term, last_i_term, last_d_term, last_common_command
 
     left_m, right_m = update_position()
     position_m = (left_m + right_m) / 2
@@ -236,30 +266,65 @@ def update_motors():
         emergency_stop("manual_direction_unknown")
         return
 
+    now = running_time()
+    dt = (now - last_pid_time) / 1000
+    if dt <= 0:
+        return
+    last_pid_time = now
+
+    measured_velocity_m_s = (position_m - previous_position_m) / dt
+    previous_position_m = position_m
+    filtered_velocity_m_s += DERIVATIVE_FILTER_ALPHA * (
+        measured_velocity_m_s - filtered_velocity_m_s
+    )
+
     if abs(distance_error_m) <= POSITION_TOLERANCE_M:
         stop_motors()
-        state = IDLE
-        display.show(Image.TARGET)
-        print("TARGET position_m={} error_m={}".format(
-            position_m, distance_error_m
-        ))
+        if stable_started == 0:
+            stable_started = now
+        elif now - stable_started >= STABLE_TIME_MS:
+            state = IDLE
+            display.show(Image.TARGET)
+            print("TARGET position_m={} error_m={}".format(
+                position_m, distance_error_m
+            ))
         return
+    stable_started = 0
 
-    if running_time() - run_started > MAX_RUN_TIME_MS:
+    if now - run_started > MAX_RUN_TIME_MS:
         emergency_stop("timeout")
         return
 
-    common_command = POSITION_KP * distance_error_m
+    p_term = config["kp_position"] * distance_error_m
+    d_term = -config["kd_position"] * filtered_velocity_m_s
+    unsaturated_without_i = p_term + d_term
     speed_limit = (
         APPROACH_SPEED
         if abs(distance_error_m) < APPROACH_ZONE_M
         else MAX_SPEED
     )
+
+    # Conditional integration prevents windup while the output is saturated.
+    if (
+        abs(unsaturated_without_i) < speed_limit
+        or sign(distance_error_m) != sign(unsaturated_without_i)
+    ):
+        position_integral_m_s = clamp(
+            position_integral_m_s + distance_error_m * dt,
+            -INTEGRAL_LIMIT_M_S,
+            INTEGRAL_LIMIT_M_S,
+        )
+    i_term = config["ki_position"] * position_integral_m_s
+    common_command = p_term + i_term + d_term
     common_command = clamp(common_command, -speed_limit, speed_limit)
     if abs(common_command) < MIN_SPEED:
         common_command = sign(common_command) * MIN_SPEED
+    last_p_term = p_term
+    last_i_term = i_term
+    last_d_term = d_term
+    last_common_command = common_command
 
-    heading_correction = HEADING_KP * heading_error_m
+    heading_correction = config["kp_heading"] * heading_error_m
     movement_sign = sign(common_command)
     left_command = common_command - movement_sign * heading_correction
     right_command = common_command + movement_sign * heading_correction
@@ -295,10 +360,14 @@ def report_status():
     position_m = (left_m + right_m) / 2
     print(
         "STATUS state={} left_m={} right_m={} position_m={} target_m={} "
-        "error_m={} directions_unknown={}".format(
+        "error_m={} directions_unknown={} kp={} ki={} kd={} "
+        "p={} i={} d={} command={} velocity_m_s={}".format(
             state, left_m, right_m, position_m, config["distance_cm"] / 100,
             config["distance_cm"] / 100 - position_m,
-            manual_direction_unknown,
+            manual_direction_unknown, config["kp_position"],
+            config["ki_position"], config["kd_position"],
+            last_p_term, last_i_term, last_d_term, last_common_command,
+            filtered_velocity_m_s,
         )
     )
 

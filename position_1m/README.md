@@ -30,20 +30,50 @@ La position du robot est :
 position_m = (position_gauche_m + position_droite_m) / 2
 ```
 
-## Controle en distance
+## PID complet en distance
 
-La commande ne depend pas du temps :
+Le terme proportionnel utilise directement l'erreur de distance :
 
 ```text
 erreur_m = distance_cible_m - position_m
-commande = POSITION_KP * erreur_m
+P = kp * erreur_m
 ```
 
-Avec :
+L'integrale cumule l'erreur de distance. Elle corrige une erreur persistante,
+par exemple si les moteurs manquent de force pres de la cible :
 
 ```text
-POSITION_KP = 200
+integrale_m_s += erreur_m * dt
+I = ki * integrale_m_s
 ```
+
+L'integrale est limitee et suspendue lorsque la commande est saturee afin
+d'eviter l'emballement.
+
+Le derive utilise la vitesse mesuree par les codeurs. Il freine le robot quand
+il approche de la cible :
+
+```text
+vitesse_m_s = (position_m - position_precedente_m) / dt
+D = -kd * vitesse_m_s
+```
+
+La commande finale est :
+
+```text
+commande = P + I + D
+```
+
+Valeurs initiales du firmware :
+
+```text
+kp = 200
+ki = 5
+kd = 20
+```
+
+Le temps intervient seulement dans `I` et `D`, comme dans tout PID. La
+position, l'erreur et la cible restent mesurees en metres par les codeurs.
 
 Conversion de la commande vers la Maqueen :
 
@@ -53,12 +83,26 @@ commande < 0 : direction=2, vitesse=-commande
 commande = 0 : direction=0, vitesse=0
 ```
 
-Une correction proportionnelle garde les deux roues alignees :
+Une correction proportionnelle independante garde les deux roues alignees :
 
 ```text
 erreur_direction_m = position_gauche_m - position_droite_m
-correction = HEADING_KP * erreur_direction_m
+correction = kp_heading * erreur_direction_m
 ```
+
+## Essai et reglage
+
+Le firmware affiche une ligne `STATUS` chaque seconde avec la position, la
+vitesse, l'erreur et les contributions `p`, `i`, `d`.
+
+1. Calibrez d'abord les ticks par metre avec plusieurs mesures exactes.
+2. Posez le robot au point de depart et appuyez sur `A`.
+3. Laissez-le atteindre la cible sans le toucher.
+4. Repetez depuis le meme point, puis depuis une position differente.
+
+Pour regler finement le PID, augmentez d'abord `kp`, ajoutez `kd` pour reduire
+le depassement, puis ajoutez seulement un petit `ki` pour supprimer une erreur
+finale persistante.
 
 ## Calibration des ticks par metre
 
