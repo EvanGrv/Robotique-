@@ -2,24 +2,22 @@ from microbit import *
 
 
 ADDR = 0x10
+TARGET_TICKS = 80 / (2 * 3.14159265 * 0.0215)
 KP, KI, KD = 2, 0, 0
 MAX_SPEED = 200
 TOLERANCE_TICKS = 6
 
-target_ticks = 0
 position_ticks = 0
 previous_left = 0
 previous_right = 0
 integral = 0
 previous_error = 0
-state = 0  # 0: calibration required, 1: calibration, 2: hold 1 m
-combo = False
+running = False
 last_direct = -1
 last_speed = -1
 
 
 def read_register(register):
-    # Place the Maqueen register cursor before every read.
     i2c.write(ADDR, bytes([register]))
     return i2c.read(ADDR, 4)
 
@@ -27,11 +25,6 @@ def read_register(register):
 def coders():
     data = read_register(4)
     return (data[0] << 8) | data[1], (data[2] << 8) | data[3]
-
-
-def motor_directions():
-    data = read_register(0)
-    return data[0], data[2]
 
 
 def direction(value):
@@ -48,81 +41,61 @@ def motor(command):
     last_direct, last_speed = direct, speed
 
 
-def reset():
+def reset_and_start():
     global position_ticks, previous_left, previous_right
-    global integral, previous_error
+    global integral, previous_error, running
     motor(0)
     i2c.write(ADDR, bytes([4, 0, 0, 0]))
     sleep(20)
     previous_left, previous_right = coders()
     position_ticks = integral = previous_error = 0
+    running = True
+    display.show(Image.ARROW_N)
 
 
 def update_position():
     global position_ticks, previous_left, previous_right
     left, right = coders()
-    left_direction, right_direction = motor_directions()
-    delta_left = (left - previous_left) & 0xFFFF
-    delta_right = (right - previous_right) & 0xFFFF
-    if delta_left < 100 and delta_right < 100:
+    motor_data = read_register(0)
+    left_delta = (left - previous_left) & 0xFFFF
+    right_delta = (right - previous_right) & 0xFFFF
+    if left_delta < 100 and right_delta < 100:
         position_ticks += (
-            delta_left * direction(left_direction)
-            + delta_right * direction(right_direction)
+            left_delta * direction(motor_data[0])
+            + right_delta * direction(motor_data[2])
         ) / 2
     previous_left, previous_right = left, right
 
 
 def pid():
     global integral, previous_error
-    error_ticks = target_ticks - position_ticks
-    integral += error_ticks * 0.01
-    derivative = (error_ticks - previous_error) / 0.01
-    previous_error = error_ticks
+    error = TARGET_TICKS - position_ticks
+    integral += error * 0.01
+    derivative = (error - previous_error) / 0.01
+    previous_error = error
 
-    if abs(error_ticks) <= TOLERANCE_TICKS:
+    if abs(error) <= TOLERANCE_TICKS:
         motor(0)
+        display.show(Image.TARGET)
     else:
-        motor(KP * error_ticks + KI * integral + KD * derivative)
+        motor(KP * error + KI * integral + KD * derivative)
 
 
 display.show(Image.NO)
-print("WAITING_MAQUEEN")
 while ADDR not in i2c.scan():
     sleep(100)
 
-reset()
-display.show("C")
-print("READY_CALIBRATION")
+reset_and_start()
 
 while True:
-    both = button_a.is_pressed() and button_b.is_pressed()
-
-    if both and not combo:
-        combo = True
-        target_ticks = 0
-        reset()
-        state = 1
-        display.show("C")
-    elif not both and combo:
-        button_a.was_pressed()
-        button_b.was_pressed()
-        combo = False
-    elif not combo and button_b.was_pressed():
-        if state == 1:
-            update_position()
-            left, right = coders()
-            target_ticks = (left + right) / 2
-            if target_ticks > 100:
-                position_ticks = target_ticks
-                integral = previous_error = 0
-                state = 2
-                display.show(Image.YES)
-        else:
-            motor(0)
-    elif not combo and button_a.was_pressed() and target_ticks:
-        state = 2
+    if button_a.was_pressed():
+        reset_and_start()
+    if button_b.was_pressed():
+        motor(0)
+        running = False
+        display.show(Image.SQUARE_SMALL)
 
     update_position()
-    if state == 2:
+    if running:
         pid()
     sleep(10)
