@@ -1,23 +1,50 @@
-.PHONY: flash serial remote remote-stop remote-status
+PROJECT ?= guidage_robot
+PROJECT_DIR := $(PROJECT)
+FIRMWARE := $(PROJECT_DIR)/firmware.py
+CONTROLLER := $(PROJECT_DIR)/telecommande.py
 
-FLASH_FILE := $(or $(firstword $(filter %.py,$(MAKECMDGOALS))),microbit_test.py)
+PYTHON := .venv/bin/python
+UFLASH := .venv/bin/uflash
+UFS := .venv/bin/ufs
 
-flash:
-	@test -f "$(FLASH_FILE)" || { echo "Erreur : fichier introuvable : $(FLASH_FILE)"; exit 1; }
-	.venv/bin/uflash "$(FLASH_FILE)" /Volumes/MICROBIT
+.PHONY: help setup check flash install run stop status serial
 
-serial:
-	.venv/bin/python -m serial.tools.miniterm /dev/cu.usbmodem1302 115200
+help:
+	@echo "Projet selectionne : $(PROJECT)"
+	@echo "make setup                    Cree l'environnement Python"
+	@echo "make flash                    Flashe le firmware sur la micro:bit"
+	@echo "make install                  Installe le firmware via le port serie"
+	@echo "make run                      Lance la telecommande"
+	@echo "make stop                     Arrete les moteurs"
+	@echo "make status                   Affiche l'etat des moteurs"
+	@echo "make serial                   Ouvre la console serie"
+	@echo "make run PROJECT=autre_projet Lance un autre projet"
 
-remote:
-	.venv/bin/python remote_control.py
+setup:
+	python3 -m venv .venv
+	$(PYTHON) -m pip install uflash microfs
 
-remote-stop:
-	.venv/bin/python remote_control.py --command stop
+check:
+	@test -x "$(PYTHON)" || { echo "Erreur : lancez 'make setup'."; exit 1; }
+	@test -f "$(FIRMWARE)" || { echo "Erreur : firmware introuvable : $(FIRMWARE)"; exit 1; }
+	@test -f "$(CONTROLLER)" || { echo "Erreur : telecommande introuvable : $(CONTROLLER)"; exit 1; }
+	PYTHONPYCACHEPREFIX=/tmp/robotique-pycache $(PYTHON) -m py_compile "$(CONTROLLER)"
 
-remote-status:
-	.venv/bin/python remote_control.py --command status
+flash: check
+	@test -d /Volumes/MICROBIT || { echo "Erreur : volume MICROBIT introuvable."; exit 1; }
+	$(UFLASH) "$(FIRMWARE)" /Volumes/MICROBIT
 
-# Permet d'utiliser un fichier Python comme argument : make flash programme.py
-%.py:
-	@:
+install: check
+	$(UFS) put "$(FIRMWARE)" main.py
+
+run: check
+	$(PYTHON) "$(CONTROLLER)"
+
+stop: check
+	$(PYTHON) "$(CONTROLLER)" --command stop
+
+status: check
+	$(PYTHON) "$(CONTROLLER)" --command status
+
+serial: check
+	$(PYTHON) -m serial.tools.miniterm /dev/cu.usbmodem1302 115200
