@@ -14,6 +14,9 @@ AVOID_SPEED = 100
 WHEELIE_SPEED = 180
 WHEELIE_MAX_MS = 700
 WHEELIE_TILT_LIMIT = 650
+SQUARE_SIDE_MS = 700
+QUARTER_TURN_MS = 430
+FULL_TURN_MS = 1700
 
 
 def motors(left_direction, left_speed, right_direction, right_speed):
@@ -74,6 +77,39 @@ def avoid_obstacle():
     stop()
 
 
+def run_figure(left_direction, left_speed, right_direction, right_speed, duration):
+    started = running_time()
+    motors(left_direction, left_speed, right_direction, right_speed)
+    while running_time() - started < duration:
+        if distance_cm() < OBSTACLE_CM:
+            avoid_obstacle()
+            return False
+        sleep(20)
+    stop()
+    return True
+
+
+def square():
+    display.show(Image.SQUARE)
+    note(523)
+    for side in range(4):
+        if not run_figure(FORWARD, DANCE_SPEED, FORWARD, DANCE_SPEED, SQUARE_SIDE_MS):
+            return
+        display.show(Image.ARROW_E)
+        note(659)
+        if not run_figure(FORWARD, TURN_SPEED, BACKWARD, TURN_SPEED, QUARTER_TURN_MS):
+            return
+    display.show(Image.SQUARE)
+    sleep(200)
+
+
+def full_turn():
+    display.show(Image.DIAMOND_SMALL)
+    note(880)
+    run_figure(FORWARD, TURN_SPEED, BACKWARD, TURN_SPEED, FULL_TURN_MS)
+    sleep(200)
+
+
 def wheelie():
     start = running_time()
     display.show(Image.DIAMOND)
@@ -126,6 +162,8 @@ while True:
         stop()
         step += 1
         if step >= len(STEPS):
+            square()
+            full_turn()
             wheelie()
             step = 0
         step_started = running_time()

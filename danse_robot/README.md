@@ -7,6 +7,8 @@ Ce projet combine :
 - une esquive prioritaire ;
 - des icones correspondant aux mouvements ;
 - des notes jouees pendant la danse ;
+- un parcours en carre avec quatre quarts de tour ;
+- une rotation complete sur place ;
 - une tentative courte et protegee de figure sur les roues arriere.
 
 ## Utilisation
@@ -23,6 +25,9 @@ make flash PROJECT=danse_robot
 
 La figure sur les roues arriere est experimentale. Elle est limitee a `700 ms`
 et s'arrete si un obstacle ou une inclinaison importante est detecte.
+
+Le carre et la rotation complete surveillent egalement l'ultrason pendant leur
+execution et abandonnent la figure pour esquiver un obstacle.
 
 Un equilibre dynamique durable exige de calibrer l'axe de l'accelerometre, la
 position cible et les gains d'une boucle de controle d'inclinaison sur le robot
