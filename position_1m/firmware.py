@@ -7,7 +7,7 @@ MIN_SPEED = 45
 MAX_SPEED = 200
 TOLERANCE_TICKS = 4
 
-ticks_per_meter = 0
+target_ticks = 0
 position_ticks = 0
 previous_left = 0
 previous_right = 0
@@ -15,16 +15,24 @@ integral = 0
 previous_error = 0
 state = 0  # 0: calibration required, 1: calibration, 2: hold 1 m
 combo = False
+last_direct = -1
+last_speed = -1
 
 
-def read(register):
+def read_register(register):
+    # Place the Maqueen register cursor before every read.
     i2c.write(ADDR, bytes([register]))
     return i2c.read(ADDR, 4)
 
 
 def coders():
-    data = read(4)
+    data = read_register(4)
     return (data[0] << 8) | data[1], (data[2] << 8) | data[3]
+
+
+def motor_directions():
+    data = read_register(0)
+    return data[0], data[2]
 
 
 def direction(value):
@@ -32,9 +40,13 @@ def direction(value):
 
 
 def motor(command):
+    global last_direct, last_speed
     speed = min(MAX_SPEED, int(abs(command))) if command else 0
     direct = 1 if command > 0 else 2 if command < 0 else 0
+    if direct == last_direct and speed == last_speed:
+        return
     i2c.write(ADDR, bytes([0, direct, speed, direct, speed]))
+    last_direct, last_speed = direct, speed
 
 
 def reset():
@@ -50,20 +62,20 @@ def reset():
 def update_position():
     global position_ticks, previous_left, previous_right
     left, right = coders()
-    direct = read(0)
+    left_direction, right_direction = motor_directions()
     delta_left = (left - previous_left) & 0xFFFF
     delta_right = (right - previous_right) & 0xFFFF
     if delta_left < 100 and delta_right < 100:
         position_ticks += (
-            delta_left * direction(direct[0])
-            + delta_right * direction(direct[2])
+            delta_left * direction(left_direction)
+            + delta_right * direction(right_direction)
         ) / 2
     previous_left, previous_right = left, right
 
 
 def pid():
     global integral, previous_error
-    error_ticks = ticks_per_meter - position_ticks
+    error_ticks = target_ticks - position_ticks
     integral += error_ticks * 0.01
     derivative = (error_ticks - previous_error) / 0.01
     previous_error = error_ticks
@@ -87,7 +99,7 @@ while True:
 
     if both and not combo:
         combo = True
-        ticks_per_meter = 0
+        target_ticks = 0
         reset()
         state = 1
         display.show("C")
@@ -97,15 +109,17 @@ while True:
         combo = False
     elif not combo and button_b.was_pressed():
         if state == 1:
+            update_position()
             left, right = coders()
-            ticks_per_meter = (left + right) / 2
-            if ticks_per_meter > 100:
-                position_ticks = ticks_per_meter
+            target_ticks = (left + right) / 2
+            if target_ticks > 100:
+                position_ticks = target_ticks
+                integral = previous_error = 0
                 state = 2
                 display.show(Image.YES)
         else:
             motor(0)
-    elif not combo and button_a.was_pressed() and ticks_per_meter:
+    elif not combo and button_a.was_pressed() and target_ticks:
         state = 2
 
     update_position()
