@@ -76,6 +76,13 @@ def handle(command):
         stop()
     elif command == "status":
         status()
+    elif command == "start":
+        stop()
+        print("READY")
+    elif command == "reset":
+        speed = DEFAULT_SPEED
+        stop()
+        print("RESET")
     elif command.startswith("speed "):
         speed = max(0, min(240, int(command.split()[1])))
         print("SPEED", speed)

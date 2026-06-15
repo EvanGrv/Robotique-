@@ -77,7 +77,10 @@ def interactive(port):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--command", choices=["stop", "status", "forward", "back", "left", "right"])
+    parser.add_argument(
+        "--command",
+        choices=["start", "stop", "reset", "status", "forward", "back", "left", "right"],
+    )
     args = parser.parse_args()
 
     port = serial.Serial(find_port(), 115200, timeout=0.2)

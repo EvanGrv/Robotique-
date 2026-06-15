@@ -6,18 +6,19 @@ CONTROLLER := $(PROJECT_DIR)/telecommande.py
 PYTHON := .venv/bin/python
 UFLASH := .venv/bin/uflash
 UFS := .venv/bin/ufs
+SERIAL_PORT := $(firstword $(wildcard /dev/cu.usbmodem*))
 
-.PHONY: help setup check flash install run stop status serial
+.PHONY: help setup check check-controller flash install run start stop reset status serial read-config read-history
 
 help:
 	@echo "Projet selectionne : $(PROJECT)"
 	@echo "make setup                    Cree l'environnement Python"
 	@echo "make flash                    Flashe le firmware sur la micro:bit"
 	@echo "make install                  Installe le firmware via le port serie"
-	@echo "make run                      Lance la telecommande"
-	@echo "make stop                     Arrete les moteurs"
-	@echo "make status                   Affiche l'etat des moteurs"
+	@echo "make run                      Lance la telecommande si disponible"
 	@echo "make serial                   Ouvre la console serie"
+	@echo "make read-config              Recupere la configuration sauvegardee"
+	@echo "make read-history             Recupere l'historique de calibration"
 	@echo "make run PROJECT=autre_projet Lance un autre projet"
 
 setup:
@@ -27,7 +28,10 @@ setup:
 check:
 	@test -x "$(PYTHON)" || { echo "Erreur : lancez 'make setup'."; exit 1; }
 	@test -f "$(FIRMWARE)" || { echo "Erreur : firmware introuvable : $(FIRMWARE)"; exit 1; }
-	@test -f "$(CONTROLLER)" || { echo "Erreur : telecommande introuvable : $(CONTROLLER)"; exit 1; }
+	PYTHONPYCACHEPREFIX=/tmp/robotique-pycache $(PYTHON) -m py_compile "$(FIRMWARE)"
+
+check-controller: check
+	@test -f "$(CONTROLLER)" || { echo "Erreur : ce projet autonome ne possede pas de telecommande."; exit 1; }
 	PYTHONPYCACHEPREFIX=/tmp/robotique-pycache $(PYTHON) -m py_compile "$(CONTROLLER)"
 
 flash: check
@@ -37,14 +41,27 @@ flash: check
 install: check
 	$(UFS) put "$(FIRMWARE)" main.py
 
-run: check
+run: check-controller
 	$(PYTHON) "$(CONTROLLER)"
 
-stop: check
+start: check-controller
+	$(PYTHON) "$(CONTROLLER)" --command start
+
+stop: check-controller
 	$(PYTHON) "$(CONTROLLER)" --command stop
 
-status: check
+reset: check-controller
+	$(PYTHON) "$(CONTROLLER)" --command reset
+
+status: check-controller
 	$(PYTHON) "$(CONTROLLER)" --command status
 
 serial: check
-	$(PYTHON) -m serial.tools.miniterm /dev/cu.usbmodem1302 115200
+	@test -n "$(SERIAL_PORT)" || { echo "Erreur : port serie micro:bit introuvable."; exit 1; }
+	$(PYTHON) -m serial.tools.miniterm "$(SERIAL_PORT)" 115200
+
+read-config: check
+	$(UFS) get position_config.txt "$(PROJECT_DIR)/position_config.txt"
+
+read-history: check
+	$(UFS) get calibration_history.txt "$(PROJECT_DIR)/calibration_history.txt"

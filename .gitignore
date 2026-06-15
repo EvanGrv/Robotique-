@@ -2,3 +2,5 @@
 __pycache__/
 *.pyc
 *.hex
+**/position_config.txt
+**/calibration_history.txt
