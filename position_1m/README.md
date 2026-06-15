@@ -15,6 +15,15 @@ Le firmware contient uniquement :
 
 Le nombre moyen de ticks mesure devient `ticks_per_meter`.
 
+Pendant la calibration et ensuite toutes les `500 ms`, le port serie affiche :
+
+```text
+READ compteur_gauche compteur_droit direction_gauche direction_droite ticks_signes position
+```
+
+Cela permet de verifier directement si l'adresse `0x00` renvoie `1` en poussant
+le robot vers l'avant et `2` en le poussant vers l'arriere.
+
 ## Utilisation
 
 - `A` : aller a la position `1 m`.

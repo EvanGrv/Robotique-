@@ -12,6 +12,7 @@ previous_right = 0
 integral = 0
 previous_error = 0
 moving = False
+last_report = running_time()
 
 
 def read(register):
@@ -55,6 +56,7 @@ def update_position():
             + right_delta * sign(right_direction)
         ) / 2
     previous_left, previous_right = left, right
+    return left, right, left_direction, right_direction
 
 
 def motor(command):
@@ -78,7 +80,7 @@ def move_to(target):
 
 
 def calibrate():
-    global ticks_per_meter
+    global ticks_per_meter, last_report
     reset()
     display.show("C")
     while button_a.is_pressed() or button_b.is_pressed():
@@ -86,6 +88,10 @@ def calibrate():
     button_a.was_pressed()
     button_b.was_pressed()
     while not button_b.was_pressed():
+        left, right, left_direction, right_direction = update_position()
+        if running_time() - last_report > 500:
+            last_report = running_time()
+            print("CALIBRATION", left, right, left_direction, right_direction, ticks)
         sleep(10)
     left, right = coders()
     ticks_per_meter = (left + right) / 2
@@ -108,7 +114,13 @@ while True:
     elif button_b.was_pressed():
         reset()
 
-    update_position()
+    left, right, left_direction, right_direction = update_position()
     if moving:
         move_to(TARGET_M)
+
+    if running_time() - last_report > 500:
+        last_report = running_time()
+        position = ticks / ticks_per_meter if ticks_per_meter else 0
+        print("READ", left, right, left_direction, right_direction, ticks, position)
+
     sleep(10)
