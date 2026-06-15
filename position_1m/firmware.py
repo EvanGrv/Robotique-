@@ -3,12 +3,12 @@ from microbit import *
 
 ADDRESS = 0x10
 TARGET_M = 1.0
-TICKS_PER_METER = 80 / (2 * 3.14159265 * 0.0215)
 KP, KI, KD = 200, 0, 0
 
 IDLE, CALIBRATION, MOVING = 0, 1, 2
 state = IDLE
 combo_pressed = False
+ticks_per_meter = 0
 ticks = 0
 previous_left = 0
 previous_right = 0
@@ -70,7 +70,7 @@ def update_position():
 
 def move_to(target):
     global state, integral, previous_error
-    error = target - ticks / TICKS_PER_METER
+    error = target - ticks / ticks_per_meter
     integral += error * 0.01
     derivative = (error - previous_error) / 0.01
     previous_error = error
@@ -86,7 +86,8 @@ def move_to(target):
 
 
 def start_calibration():
-    global state
+    global state, ticks_per_meter
+    ticks_per_meter = 0
     reset_position()
     state = CALIBRATION
     display.show("C")
@@ -94,13 +95,13 @@ def start_calibration():
 
 
 def finish_calibration():
-    global state, TICKS_PER_METER
+    global state, ticks_per_meter
     left, right = coders()
     measured_ticks = (left + right) / 2
     if measured_ticks > 100:
-        TICKS_PER_METER = measured_ticks
+        ticks_per_meter = measured_ticks
         display.show(Image.YES)
-        print("CALIBRATED ticks_per_meter={}".format(TICKS_PER_METER))
+        print("CALIBRATED ticks_per_meter={}".format(ticks_per_meter))
     else:
         display.show(Image.NO)
         print("CALIBRATION_REJECTED ticks={}".format(measured_ticks))
@@ -110,10 +111,14 @@ def finish_calibration():
 
 def start_move():
     global state, integral, previous_error
+    if ticks_per_meter == 0:
+        display.show(Image.NO)
+        print("CALIBRATION_REQUIRED")
+        return
     integral = previous_error = 0
     state = MOVING
     print("STATE MOVING target_m={} ticks_per_meter={}".format(
-        TARGET_M, TICKS_PER_METER
+        TARGET_M, ticks_per_meter
     ))
 
 
@@ -122,8 +127,8 @@ while ADDRESS not in i2c.scan():
     sleep(100)
 
 reset_position()
-display.show("R")
-print("STATE READY ticks_per_meter={}".format(TICKS_PER_METER))
+display.show("C")
+print("STATE CALIBRATION_REQUIRED ticks_per_meter=0")
 
 while True:
     both = button_a.is_pressed() and button_b.is_pressed()
@@ -142,7 +147,7 @@ while True:
             else:
                 reset_position()
                 state = IDLE
-                display.show("R")
+                display.show("R" if ticks_per_meter else "C")
                 print("STATE RESET")
         elif button_a.was_pressed() and state == IDLE:
             start_move()
@@ -153,9 +158,10 @@ while True:
 
     if running_time() - last_report > 500:
         last_report = running_time()
+        position = ticks / ticks_per_meter if ticks_per_meter else 0
         print("READ state={} raw={}:{} dir={}:{} ticks={} position={}".format(
             state, left, right, left_direction, right_direction, ticks,
-            ticks / TICKS_PER_METER,
+            position,
         ))
 
     sleep(10)

@@ -9,11 +9,18 @@ Le firmware contient uniquement :
 
 ## Premier test
 
-Le robot utilise immediatement la valeur theorique d'environ `592.2 ticks/m`.
+Au demarrage, toutes les valeurs sont remises a zero :
 
-Pour mesurer une valeur reelle :
+```text
+ticks_per_meter = 0
+ticks = 0
+integrale = 0
+erreur_precedente = 0
+```
 
-1. Appuyer sur `A+B` pour lancer la calibration et remettre les compteurs a zero.
+Aucune valeur theorique et aucune ancienne calibration ne sont utilisees.
+
+1. Appuyer sur `A+B` pour lancer la mesure et remettre les compteurs a zero.
 2. Faire rouler manuellement le robot sur exactement `1 m`.
 3. Appuyer sur `B`.
 
@@ -37,7 +44,7 @@ le robot vers l'avant et `2` en le poussant vers l'arriere.
 Etats affiches :
 
 - `R` : pret ;
-- `C` : calibration ;
+- `C` : calibration obligatoire ou en cours ;
 - fleche haute/basse : PID en mouvement ;
 - cible : position atteinte.
 
