@@ -19,7 +19,8 @@ make flash PROJECT=danse_robot
 Reaction obstacle :
 
 - stop ;
-- recul a vitesse maximale pendant `2 ms` ;
+- arret pendant `100 ms` ;
+- recul a vitesse maximale pendant `1 s` ;
 - reprise immediate en avant a vitesse maximale.
 
 Affichage :

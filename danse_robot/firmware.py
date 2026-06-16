@@ -7,7 +7,8 @@ FORWARD = 1
 BACKWARD = 2
 SPEED = 255
 OBSTACLE_CM = 20
-BACK_TIME_MS = 2
+STOP_TIME_MS = 100
+BACK_TIME_MS = 1000
 
 
 def write_motors(left_direction, left_speed, right_direction, right_speed):
@@ -32,6 +33,7 @@ def stop():
 def avoid_obstacle():
     stop()
     display.show(Image.NO)
+    sleep(STOP_TIME_MS)
     go_backward()
     sleep(BACK_TIME_MS)
     go_forward()
