@@ -8,18 +8,21 @@ FORWARD = 1
 BACKWARD = 2
 OBSTACLE_CM = 20
 
-DANCE_SPEED = 100
-TURN_SPEED = 110
-AVOID_SPEED = 100
-WHEELIE_SPEED = 180
-WHEELIE_MAX_MS = 700
-WHEELIE_TILT_LIMIT = 650
-SQUARE_SIDE_MS = 700
-QUARTER_TURN_MS = 430
-FULL_TURN_MS = 1700
+KP, KI, KD = 0.8, 0, 0
+MAX_SPEED = 180
+DANCE_SPEED = 120
+TURN_SPEED = 130
+BACK_SPEED = 100
+WHEELIE_SPEED = 255
+
+position_ticks = 0
+previous_left = 0
+previous_right = 0
+integral = 0
+previous_error = 0
 
 
-def motors(left_direction, left_speed, right_direction, right_speed):
+def write_motors(left_direction, left_speed, right_direction, right_speed):
     i2c.write(
         ADDR,
         bytes([0, left_direction, left_speed, right_direction, right_speed]),
@@ -27,123 +30,156 @@ def motors(left_direction, left_speed, right_direction, right_speed):
 
 
 def stop():
-    motors(0, 0, 0, 0)
+    write_motors(0, 0, 0, 0)
 
 
-def distance_cm():
+def get_distance_cm():
     pin8.write_digital(0)
     utime.sleep_us(2)
     pin8.write_digital(1)
     utime.sleep_us(10)
     pin8.write_digital(0)
 
-    started = utime.ticks_us()
+    timeout = 30000
+    t0 = utime.ticks_us()
     while pin12.read_digital() == 0:
-        if utime.ticks_diff(utime.ticks_us(), started) > 30000:
+        if utime.ticks_diff(utime.ticks_us(), t0) > timeout:
             return 999
 
-    echo = utime.ticks_us()
+    start = utime.ticks_us()
     while pin12.read_digital() == 1:
-        if utime.ticks_diff(utime.ticks_us(), echo) > 30000:
+        if utime.ticks_diff(utime.ticks_us(), start) > timeout:
             return 999
 
-    return utime.ticks_diff(utime.ticks_us(), echo) * 0.0343 / 2
+    duration_us = utime.ticks_diff(utime.ticks_us(), start)
+    return duration_us * 0.0343 / 2
 
 
-def note(frequency):
-    music.pitch(frequency, 120, wait=False)
+def read_register(register):
+    i2c.write(ADDR, bytes([register]))
+    return i2c.read(ADDR, 4)
 
 
-def move(left_direction, left_speed, right_direction, right_speed, image, tone):
-    if distance_cm() < OBSTACLE_CM:
-        avoid_obstacle()
-        return
-    display.show(image)
-    note(tone)
-    motors(left_direction, left_speed, right_direction, right_speed)
+def coders():
+    data = read_register(4)
+    return (data[0] << 8) | data[1], (data[2] << 8) | data[3]
+
+
+def direction(value):
+    return 1 if value == 1 else -1 if value == 2 else 0
+
+
+def reset_position():
+    global position_ticks, previous_left, previous_right
+    global integral, previous_error
+    stop()
+    i2c.write(ADDR, bytes([4, 0, 0, 0]))
+    sleep(20)
+    previous_left, previous_right = coders()
+    position_ticks = integral = previous_error = 0
+
+
+def update_position():
+    global position_ticks, previous_left, previous_right
+    left, right = coders()
+    motor_data = read_register(0)
+    left_delta = (left - previous_left) & 0xFFFF
+    right_delta = (right - previous_right) & 0xFFFF
+    if left_delta < 100 and right_delta < 100:
+        position_ticks += (
+            left_delta * direction(motor_data[0])
+            + right_delta * direction(motor_data[2])
+        ) / 2
+    previous_left, previous_right = left, right
 
 
 def avoid_obstacle():
     stop()
     display.show(Image.NO)
-    note(220)
+    music.pitch(220, 120, wait=False)
     sleep(150)
-    motors(BACKWARD, AVOID_SPEED, BACKWARD, AVOID_SPEED)
+    write_motors(BACKWARD, BACK_SPEED, BACKWARD, BACK_SPEED)
     display.show(Image.ARROW_S)
     sleep(350)
-    motors(BACKWARD, TURN_SPEED, FORWARD, TURN_SPEED)
+    write_motors(BACKWARD, TURN_SPEED, FORWARD, TURN_SPEED)
     display.show(Image.ARROW_E)
     sleep(450)
     stop()
+    reset_position()
 
 
-def run_figure(left_direction, left_speed, right_direction, right_speed, duration):
-    started = running_time()
-    motors(left_direction, left_speed, right_direction, right_speed)
-    while running_time() - started < duration:
-        if distance_cm() < OBSTACLE_CM:
-            avoid_obstacle()
-            return False
+def obstacle():
+    if get_distance_cm() < OBSTACLE_CM:
+        avoid_obstacle()
+        return True
+    return False
+
+
+def pid_move(target_ticks, image, tone):
+    global integral, previous_error
+    update_position()
+    error = target_ticks - position_ticks
+    integral += error * 0.01
+    derivative = (error - previous_error) / 0.01
+    previous_error = error
+    command = KP * error + KI * integral + KD * derivative
+    speed = min(MAX_SPEED, int(abs(command)))
+    direct = FORWARD if command > 0 else BACKWARD if command < 0 else 0
+    display.show(image)
+    music.pitch(tone, 80, wait=False)
+    write_motors(direct, speed, direct, speed)
+
+
+def pid_segment(target_ticks, duration, image, tone):
+    reset_position()
+    start = running_time()
+    while running_time() - start < duration:
+        if obstacle():
+            return
+        pid_move(target_ticks, image, tone)
+        sleep(10)
+    stop()
+
+
+def timed_move(left_direction, left_speed, right_direction, right_speed, duration, image, tone):
+    start = running_time()
+    display.show(image)
+    music.pitch(tone, 100, wait=False)
+    write_motors(left_direction, left_speed, right_direction, right_speed)
+    while running_time() - start < duration:
+        if obstacle():
+            return
         sleep(20)
     stop()
-    return True
 
 
-def square():
-    display.show(Image.SQUARE)
-    note(523)
-    for side in range(4):
-        if not run_figure(FORWARD, DANCE_SPEED, FORWARD, DANCE_SPEED, SQUARE_SIDE_MS):
-            return
-        display.show(Image.ARROW_E)
-        note(659)
-        if not run_figure(FORWARD, TURN_SPEED, BACKWARD, TURN_SPEED, QUARTER_TURN_MS):
-            return
-    display.show(Image.SQUARE)
-    sleep(200)
-
-
-def full_turn():
-    display.show(Image.DIAMOND_SMALL)
-    note(880)
-    run_figure(FORWARD, TURN_SPEED, BACKWARD, TURN_SPEED, FULL_TURN_MS)
-    sleep(200)
-
-
-def wheelie():
-    start = running_time()
+def wheelie_test():
+    stop()
     display.show(Image.DIAMOND)
-    note(784)
-    motors(FORWARD, WHEELIE_SPEED, FORWARD, WHEELIE_SPEED)
-
-    while running_time() - start < WHEELIE_MAX_MS:
-        if distance_cm() < OBSTACLE_CM or abs(accelerometer.get_z()) > WHEELIE_TILT_LIMIT:
-            break
-        sleep(10)
-
+    music.pitch(988, 100, wait=False)
+    sleep(250)
+    write_motors(FORWARD, WHEELIE_SPEED, FORWARD, WHEELIE_SPEED)
+    sleep(180)
     stop()
     sleep(250)
 
 
-STEPS = (
-    (FORWARD, DANCE_SPEED, FORWARD, DANCE_SPEED, Image.ARROW_N, 523, 450),
-    (BACKWARD, TURN_SPEED, FORWARD, TURN_SPEED, Image.ARROW_E, 659, 400),
-    (FORWARD, TURN_SPEED, BACKWARD, TURN_SPEED, Image.ARROW_W, 784, 400),
-    (BACKWARD, DANCE_SPEED, BACKWARD, DANCE_SPEED, Image.ARROW_S, 659, 350),
-)
+def dance_cycle():
+    pid_segment(140, 600, Image.ARROW_N, 523)
+    timed_move(BACKWARD, TURN_SPEED, FORWARD, TURN_SPEED, 450, Image.ARROW_E, 659)
+    pid_segment(100, 500, Image.ARROW_N, 784)
+    timed_move(FORWARD, TURN_SPEED, BACKWARD, TURN_SPEED, 450, Image.ARROW_W, 659)
+    timed_move(BACKWARD, DANCE_SPEED, BACKWARD, DANCE_SPEED, 350, Image.ARROW_S, 523)
+    wheelie_test()
 
 
 display.show(Image.NO)
 while ADDR not in i2c.scan():
     sleep(100)
 
-stop()
+reset_position()
 display.show(Image.HAPPY)
-music.play(["C4:2", "E4:2", "G4:2"], wait=True)
-
-step = 0
-step_started = running_time()
-move(*STEPS[step][0:6])
+music.play(["C4:1", "E4:1", "G4:1"], wait=True)
 
 while True:
     if button_b.was_pressed():
@@ -151,22 +187,5 @@ while True:
         display.show(Image.SQUARE_SMALL)
         while not button_a.was_pressed():
             sleep(20)
-        step_started = running_time()
-
-    if distance_cm() < OBSTACLE_CM:
-        avoid_obstacle()
-        step_started = running_time()
-        move(*STEPS[step][0:6])
-
-    if running_time() - step_started >= STEPS[step][6]:
-        stop()
-        step += 1
-        if step >= len(STEPS):
-            square()
-            full_turn()
-            wheelie()
-            step = 0
-        step_started = running_time()
-        move(*STEPS[step][0:6])
-
-    sleep(20)
+        reset_position()
+    dance_cycle()

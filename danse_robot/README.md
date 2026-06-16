@@ -1,15 +1,12 @@
 # Danse autonome Maqueen
 
-Ce projet combine :
+Ce projet combine dans une boucle simple :
 
-- une choregraphie autonome ;
 - la detection d'obstacles avec l'ultrason sur `pin8`/`pin12` ;
 - une esquive prioritaire ;
-- des icones correspondant aux mouvements ;
-- des notes jouees pendant la danse ;
-- un parcours en carre avec quatre quarts de tour ;
-- une rotation complete sur place ;
-- une tentative courte et protegee de figure sur les roues arriere.
+- une danse avec affichage et musique ;
+- des segments de danse pilotes par le PID de position du projet `position_1m` ;
+- un test de roue arriere : arret, puis impulsion a vitesse `255`.
 
 ## Utilisation
 
@@ -23,13 +20,9 @@ make flash PROJECT=danse_robot
 
 ## Securite
 
-La figure sur les roues arriere est experimentale. Elle est limitee a `700 ms`
-et s'arrete si un obstacle ou une inclinaison importante est detecte.
+La detection d'obstacle est prioritaire pendant chaque segment de danse. Si un
+obstacle est detecte a moins de `20 cm`, le robot stoppe, recule, tourne, puis
+reprend la danse.
 
-Le carre et la rotation complete surveillent egalement l'ultrason pendant leur
-execution et abandonnent la figure pour esquiver un obstacle.
-
-Un equilibre dynamique durable exige de calibrer l'axe de l'accelerometre, la
-position cible et les gains d'une boucle de controle d'inclinaison sur le robot
-reel. Le firmware actuel realise une impulsion protegee, pas un maintien
-d'equilibre garanti.
+Le test de roue arriere est volontairement tres court (`180 ms`) car la vitesse
+`255` est brutale. Ce n'est pas un maintien d'equilibre garanti.
