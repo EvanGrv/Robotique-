@@ -18,5 +18,5 @@ make flash PROJECT=danse_robot
 
 Affichage :
 
-- fleche haut : avance ;
+- fleche haut : avance a vitesse maximale (`255`) ;
 - croix : obstacle detecte, moteurs arretes.

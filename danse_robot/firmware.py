@@ -4,7 +4,7 @@ import utime
 
 MAQUEEN_ADDR = 0x10
 FORWARD = 1
-SPEED = 150
+SPEED = 255
 OBSTACLE_CM = 20
 
 
