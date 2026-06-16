@@ -9,12 +9,14 @@ Des que la Maqueen est detectee, le firmware :
 
 ```python
 TARGET_TICKS = 80 / (2 * pi * 0.0215)  # environ 592 ticks
-KP, KI, KD = 2, 0, 0
+KP, KI, KD = 1, 0, 0
+MIN_SPEED = 40
 MAX_SPEED = 200
-TOLERANCE_TICKS = 6
+TOLERANCE_TICKS = 4
 ```
 
-La commande est strictement proportionnelle a la distance restante :
+La commande est proportionnelle a la distance restante avec une vitesse
+minimale de correction hors tolerance :
 
 ```python
 error_ticks = TARGET_TICKS - position_ticks

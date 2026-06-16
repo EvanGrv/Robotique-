@@ -3,9 +3,10 @@ from microbit import *
 
 ADDR = 0x10
 TARGET_TICKS = 80 / (2 * 3.14159265 * 0.0215)
-KP, KI, KD = 2, 0, 0
+KP, KI, KD = 1, 0, 0
+MIN_SPEED = 40
 MAX_SPEED = 200
-TOLERANCE_TICKS = 6
+TOLERANCE_TICKS = 4
 
 position_ticks = 0
 previous_left = 0
@@ -33,7 +34,7 @@ def direction(value):
 
 def motor(command):
     global last_direct, last_speed
-    speed = min(MAX_SPEED, int(abs(command))) if command else 0
+    speed = min(MAX_SPEED, max(MIN_SPEED, int(abs(command)))) if command else 0
     direct = 1 if command > 0 else 2 if command < 0 else 0
     if direct == last_direct and speed == last_speed:
         return
