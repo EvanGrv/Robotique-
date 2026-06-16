@@ -16,7 +16,13 @@ make check PROJECT=danse_robot
 make flash PROJECT=danse_robot
 ```
 
+Reaction obstacle :
+
+- stop ;
+- recul a vitesse maximale pendant `2 ms` ;
+- reprise immediate en avant a vitesse maximale.
+
 Affichage :
 
 - fleche haut : avance a vitesse maximale (`255`) ;
-- croix : obstacle detecte, moteurs arretes.
+- croix : obstacle detecte pendant la reaction.

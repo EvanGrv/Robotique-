@@ -4,8 +4,10 @@ import utime
 
 MAQUEEN_ADDR = 0x10
 FORWARD = 1
+BACKWARD = 2
 SPEED = 255
 OBSTACLE_CM = 20
+BACK_TIME_MS = 2
 
 
 def write_motors(left_direction, left_speed, right_direction, right_speed):
@@ -19,8 +21,21 @@ def go_forward():
     write_motors(FORWARD, SPEED, FORWARD, SPEED)
 
 
+def go_backward():
+    write_motors(BACKWARD, SPEED, BACKWARD, SPEED)
+
+
 def stop():
     write_motors(FORWARD, 0, FORWARD, 0)
+
+
+def avoid_obstacle():
+    stop()
+    display.show(Image.NO)
+    go_backward()
+    sleep(BACK_TIME_MS)
+    go_forward()
+    display.show(Image.ARROW_N)
 
 
 def get_distance_cm():
@@ -49,8 +64,7 @@ display.show(Image.ARROW_N)
 
 while True:
     if get_distance_cm() < OBSTACLE_CM:
-        stop()
-        display.show(Image.NO)
+        avoid_obstacle()
     else:
         go_forward()
         display.show(Image.ARROW_N)
