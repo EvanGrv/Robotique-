@@ -3,10 +3,8 @@ from microbit import *
 
 ADDR = 0x10
 TARGET_TICKS = 80 / (2 * 3.14159265 * 0.0215)
-KP, KI, KD = 1, 0, 0
-MIN_SPEED = 40
+KP, KI, KD = 0.8, 0, 0
 MAX_SPEED = 200
-TOLERANCE_TICKS = 4
 
 position_ticks = 0
 previous_left = 0
@@ -34,7 +32,7 @@ def direction(value):
 
 def motor(command):
     global last_direct, last_speed
-    speed = min(MAX_SPEED, max(MIN_SPEED, int(abs(command)))) if command else 0
+    speed = min(MAX_SPEED, int(abs(command))) if command else 0
     direct = 1 if command > 0 else 2 if command < 0 else 0
     if direct == last_direct and speed == last_speed:
         return
@@ -74,12 +72,9 @@ def pid():
     integral += error * 0.01
     derivative = (error - previous_error) / 0.01
     previous_error = error
-
-    if abs(error) <= TOLERANCE_TICKS:
-        motor(0)
-        display.show(Image.TARGET)
-    else:
-        motor(KP * error + KI * integral + KD * derivative)
+    command = KP * error + KI * integral + KD * derivative
+    motor(command)
+    display.show(Image.TARGET if int(abs(command)) == 0 else Image.ARROW_N)
 
 
 display.show(Image.NO)
